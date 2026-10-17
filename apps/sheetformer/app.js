@@ -2,11 +2,12 @@ import { parseBasePlate } from './basePlate.js?v=obj-loaders-20261014';
 import { parseReferenceObj } from './referenceObj.js?v=obj-loaders-20261014';
 import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets, objectRegionBounds, rotateReferenceVertex } from './objectForm.js';
 import { activePressurePads, linearPressurePads, pressurePadLift } from './pressurePads.js';
+import { maxFaceSlope, relaxSteepFaces } from './slopeRelax.js';
 
 let SHEET = 304.8;
 let CLAMP = 57.4;
-const DEFAULT_HAND_SCALE = 15.6;
-const DEFAULT_HAND_POSITION = { x: 152.8, y: 220.4 };
+const DEFAULT_HAND_SCALE = 20.1;
+const DEFAULT_HAND_POSITION = { x: 160.7, y: 217.2 };
 const $ = (id) => document.getElementById(id);
 const formCanvas = $('form-view');
 const topCanvas = $('top-view');
@@ -32,8 +33,8 @@ function resetControlsToDefaults() {
   }
 }
 const state = {
-  handScale: DEFAULT_HAND_SCALE, objectRotation: 0, showHand: true, edge: 1.5, depth: 18.5, width: 188,
-  length: 188, angle: 45, targetX: DEFAULT_HAND_POSITION.x, targetY: DEFAULT_HAND_POSITION.y,
+  handScale: DEFAULT_HAND_SCALE, objectRotation: 0, showHand: true, edge: 1, depth: 18.5, width: 188,
+  length: 188, angle: 50, targetX: DEFAULT_HAND_POSITION.x, targetY: DEFAULT_HAND_POSITION.y,
   formDriver: 'object', formRegion: 'whole', indentCount: 0, linearPads: true, patternSeed: 50,
   padDiameter: 11, padHeight: 2, padTargets: [],
   foldStyle: 'faceted', step: 0.5, showPath: true, faceSelected: true,
@@ -41,7 +42,7 @@ const state = {
   objectMesh: null, objectField: null, fieldKey: '', fieldError: null, indentTargets: [],
   indentSourceIndices: [], indentSelectionKey: '', objectName: 'Loading…',
   axes: [], vertices: [], faces: [], faceCells: [], tipCells: new Set(), removedCells: new Set(), tipVertexIndices: [], contours: [], csvPoints: [],
-  maxSlope: 0, imprintArea: 0, baseLoaded: false, baseError: null
+  maxSlope: 0, slopeRelaxed: false, meshReady: false, imprintArea: 0, baseLoaded: false, baseError: null
 };
 let topMap = null;
 let topDrag = null;
@@ -151,14 +152,36 @@ function objectZAt(x, y) {
   const clampFade = smoothstep(Math.min(x - CLAMP, y - CLAMP, SHEET - CLAMP - x, SHEET - CLAMP - y) / 6);
   return -state.depth * surface * silhouette * clampFade;
 }
-function zAt(x, y) {
+function rawZAt(x, y) {
   if (!state.faceSelected || x <= CLAMP || y <= CLAMP || x >= SHEET - CLAMP || y >= SHEET - CLAMP) return 0;
   if (state.formDriver === 'object') {
     return objectZAt(x, y) + pressurePadLift(x, y, state.padTargets, state.padDiameter / 2, state.padHeight);
   }
   return state.foldStyle === 'faceted' ? facetedZAt(x, y) : smoothZAt(x, y);
 }
+function zAt(x, y) {
+  if (!state.meshReady || !state.axes.length) return rawZAt(x, y);
+  const ax = state.axes;
+  if (x < ax[0] || y < ax[0] || x > ax[ax.length - 1] || y > ax[ax.length - 1]) return 0;
+  const interval = value => {
+    let low = 0, high = ax.length - 1;
+    while (high - low > 1) {
+      const mid = (low + high) >> 1;
+      if (ax[mid] <= value) low = mid; else high = mid;
+    }
+    return low;
+  };
+  const i = interval(x), j = interval(y), n = ax.length;
+  const u = (x - ax[i]) / (ax[i + 1] - ax[i]);
+  const v = (y - ax[j]) / (ax[j + 1] - ax[j]);
+  const a = state.vertices[j * n + i].z;
+  const b = state.vertices[j * n + i + 1].z;
+  const d = state.vertices[(j + 1) * n + i].z;
+  const c = state.vertices[(j + 1) * n + i + 1].z;
+  return v <= u ? a + u * (b - a) + v * (c - b) : a + u * (c - d) + v * (d - a);
+}
 function mesh() {
+  state.meshReady = false;
   refreshObjectField();
   if (state.formDriver === 'object' && state.objectField && !state.linearPads && state.indentCount > 0) {
     // Keep the selected OBJ vertices fixed while scale changes. Only their
@@ -215,16 +238,10 @@ function mesh() {
       state.imprintArea += (ax[i + 1] - ax[i]) * (ax[j + 1] - ax[j]);
     }
   }
-  let maxSlope = 0;
-  for (const [ia, ib, ic] of state.faces) {
-    const a = state.vertices[ia], b = state.vertices[ib], c = state.vertices[ic];
-    const det = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-    if (Math.abs(det) < 1e-9) continue;
-    const gx = ((b.z - a.z) * (c.y - a.y) - (c.z - a.z) * (b.y - a.y)) / det;
-    const gy = ((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) / det;
-    maxSlope = Math.max(maxSlope, Math.atan(Math.hypot(gx, gy)) * 180 / Math.PI);
-  }
-  state.maxSlope = maxSlope;
+  state.slopeRelaxed = relaxSteepFaces(state.vertices, state.faces, state.angle, vertex =>
+    vertex.x <= CLAMP || vertex.y <= CLAMP || vertex.x >= SHEET - CLAMP || vertex.y >= SHEET - CLAMP).changed;
+  state.maxSlope = maxFaceSlope(state.vertices, state.faces);
+  state.meshReady = true;
   contours();
   updateReadouts();
 }
@@ -348,7 +365,8 @@ function updateReadouts() {
     : state.linearPads ? 'Linear layout' : `${state.indentTargets.length} / ${state.indentCount}`;
   $('stat-pads').textContent = state.formDriver === 'manual' ? '—'
     : state.linearPads ? `${state.padTargets.length} evenly spaced` : `${state.padTargets.length} / ${state.indentTargets.length}`;
-  $('stat-pad-size').textContent = state.formDriver === 'manual' ? '—' : `${state.padDiameter} × ${state.padHeight} mm`;
+  $('stat-pad-size').textContent = state.formDriver === 'manual' ? '—'
+    : `${state.padDiameter} × ${state.padHeight} mm nominal`;
   $('stat-area').textContent = state.objectField ? `${(state.imprintArea / 100).toFixed(1)} cm²` : '—';
   $('stat-clamp').textContent = `${CLAMP.toFixed(1)} mm`;
   $('stat-sheet-faces').textContent = state.faces.length.toLocaleString();
@@ -377,8 +395,11 @@ function updateReadouts() {
   } else if (!state.faceSelected) {
     status.textContent = 'Select the central face in the top view.';
     status.classList.add('warn');
-  } else if (state.maxSlope > state.angle) {
-    status.textContent = 'Slope exceeds ' + state.angle + '° setting. The imprint or raised pads may be too steep to form; reduce depth or pad height and review with the instructor.';
+  } else if (state.maxSlope > state.angle + 0.1) {
+    status.textContent = `Local smoothing could not bring every face below ${state.angle}°; the steepest is ${state.maxSlope.toFixed(1)}°. Reduce depth or review the shape with the instructor.`;
+    status.classList.add('warn');
+  } else if (state.slopeRelaxed) {
+    status.textContent = `Faces steeper than ${state.angle}° were eased locally. The formed depth is ${maxDepth.toFixed(1)} mm; check the pad shapes and forming feasibility with the instructor.`;
     status.classList.add('warn');
   } else {
     status.textContent = state.formDriver === 'object'

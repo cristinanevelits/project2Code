@@ -10,7 +10,7 @@ The current study uses a hand scan to investigate a wrist-and-palm impression, b
 - Lets you scale, rotate, and position the reference over the formable area while previewing the sheet in perspective and top views.
 - Generates a high-resolution, single-valued surface imprint from the portion of the OBJ above the formable plate. An earlier manual fold mode remains available for comparison.
 - Adds raised circular contact pads either at OBJ-picked points or in an aligned pattern. Pad diameter, height, and pattern position are adjustable.
-- Displays live geometry statistics, a section graph, contour previews, and a maximum-face-slope warning.
+- Displays live geometry statistics, a section graph, contour previews, and local easing of faces above the maximum-face-slope setting.
 - Exports an open-surface OBJ and a preview CSV of ordered contour points.
 
 https://cristinanevelits.github.io/project2Code/apps/sheetformer/

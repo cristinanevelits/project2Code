@@ -42,8 +42,8 @@
         <div class="status" id="status">Loading geometry…</div>
         <fieldset>
           <legend>01 / REFERENCE</legend>
-          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">15.6 mm/unit</output></label>
-          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="15.6">
+          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">20.1 mm/unit</output></label>
+          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="20.1">
           <p class="hint">Scale affects both the reference and the fitted sheet. OBJ units are unspecified.</p>
           <label class="row" for="object-rotation"><span>Rotate OBJ around wrist–finger axis</span><output id="object-rotation-value">0°</output></label>
           <input id="object-rotation" type="range" min="0" max="360" step="1" value="0" aria-label="Rotate OBJ around wrist-to-finger axis">
@@ -71,8 +71,8 @@
           <button class="load-obj" id="load-base-button" type="button">LOAD BASE PLATE OBJ</button>
           <input class="file-input" id="base-file" type="file" accept=".obj" aria-label="Choose an OBJ base plate">
           <p class="hint file-status" id="base-file-status" role="status">Default: basePlate.obj</p>
-          <label class="row"><span>Sheet mesh spacing</span><output id="edge-value">1.5 mm</output></label>
-          <input id="edge" type="range" min="1" max="8" step="0.5" value="1.5">
+          <label class="row"><span>Sheet mesh spacing</span><output id="edge-value">1 mm</output></label>
+          <input id="edge" type="range" min="1" max="8" step="0.5" value="1">
           <label class="row"><span>Active face</span><strong id="face-value">CENTRAL</strong></label>
         </fieldset>
         <fieldset>
@@ -82,7 +82,7 @@
             <option value="faceted" selected>Triangulated pleats</option>
             <option value="smooth">Original smooth shape</option>
           </select>
-          <label class="row"><span>Depth below sheet</span><output id="depth-value">18.5 mm</output></label>
+          <label class="row"><span>Target depth below sheet</span><output id="depth-value">18.5 mm</output></label>
           <input id="depth" type="range" min="2" max="70" step="0.5" value="18.5">
           <label class="row"><span>OBJ-picked pressure points</span><output id="indent-count-value">0</output></label>
           <input id="indent-count" type="range" min="0" max="12" step="1" value="0">
@@ -99,9 +99,10 @@
           <input id="width" type="range" min="35" max="190" step="1" value="188">
           <label class="row"><span>Manual zone length</span><output id="length-value">188 mm</output></label>
           <input id="length" type="range" min="45" max="190" step="1" value="188">
-          <label class="row"><span>Maximum face angle</span><output id="angle-value">45°</output></label>
-          <input id="angle" type="range" min="15" max="60" step="1" value="45">
-          <div class="coordinate"><label>Object X <input id="target-x" type="number" min="0" max="304.8" step="0.1" value="152.8"></label><label>Object Y <input id="target-y" type="number" min="0" max="304.8" step="0.1" value="220.4"></label></div>
+          <label class="row"><span>Maximum face angle</span><output id="angle-value">50°</output></label>
+          <input id="angle" type="range" min="15" max="60" step="1" value="50">
+          <p class="hint">Faces steeper than this angle are eased locally; the deeper areas are preserved where possible. Actual formed depth is shown in the preview.</p>
+          <div class="coordinate"><label>Object X <input id="target-x" type="number" min="0" max="304.8" step="0.1" value="160.7"></label><label>Object Y <input id="target-y" type="number" min="0" max="304.8" step="0.1" value="217.2"></label></div>
           <p class="hint">Pads stay inside the clamp border. These are geometry previews, not verified pressure-point locations or safe contact forces. Manual fold and zone controls affect only Manual shape.</p>
         </fieldset>
         <fieldset>
@@ -147,7 +148,7 @@
           <div class="metric"><span>Sheet triangles</span><strong id="stat-sheet-faces">—</strong></div>
           <div class="metric"><span>Max depth</span><strong id="stat-depth">—</strong></div>
           <div class="metric"><span>Max face angle</span><strong id="stat-angle">—</strong></div>
-          <div class="metric"><span>Angle setting</span><strong id="stat-limit">45°</strong></div>
+          <div class="metric"><span>Angle setting</span><strong id="stat-limit">50°</strong></div>
         </div>
         <div class="metric-group"><h2>04 / PATH</h2>
           <div class="metric"><span>Contour loops</span><strong id="stat-loops">—</strong></div>
@@ -157,6 +158,6 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="./app.js?v=linear-pad-2mm-20261017"></script>
+  <script type="module" src="./app.js?v=screenshot-preset-20261017"></script>
 </body>
 </html>
