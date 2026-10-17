@@ -1,10 +1,12 @@
 import { parseBasePlate } from './basePlate.js?v=obj-loaders-20261014';
 import { parseReferenceObj } from './referenceObj.js?v=obj-loaders-20261014';
-import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets } from './objectForm.js';
-import { insertTipVertices } from './tipMesh.js';
+import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets, objectRegionBounds, rotateReferenceVertex } from './objectForm.js';
+import { activePressurePads, linearPressurePads, pressurePadLift } from './pressurePads.js';
 
 let SHEET = 304.8;
 let CLAMP = 57.4;
+const DEFAULT_HAND_SCALE = 15.6;
+const DEFAULT_HAND_POSITION = { x: 152.8, y: 220.4 };
 const $ = (id) => document.getElementById(id);
 const formCanvas = $('form-view');
 const topCanvas = $('top-view');
@@ -16,20 +18,33 @@ function withAlpha(hex, alpha) {
   const [red, green, blue] = [0, 2, 4].map(index => parseInt(color.slice(index, index + 2), 16));
   return `rgba(${red},${green},${blue},${alpha})`;
 }
-const controls = ['hand-scale', 'show-hand', 'form-driver', 'form-region', 'edge', 'fold-style', 'depth', 'indent-count', 'pad-radius', 'width', 'length', 'angle', 'target-x', 'target-y', 'step', 'show-path'];
+const controls = ['hand-scale', 'object-rotation', 'show-hand', 'form-driver', 'form-region', 'edge', 'fold-style', 'depth', 'indent-count', 'linear-pads', 'pattern-seed', 'pad-diameter', 'pad-height', 'width', 'length', 'angle', 'target-x', 'target-y', 'step', 'show-path'];
+function resetControlsToDefaults() {
+  for (const id of controls) {
+    const control = $(id);
+    if (control instanceof HTMLSelectElement) {
+      control.selectedIndex = Array.from(control.options).findIndex(option => option.defaultSelected);
+    } else if (control.type === 'checkbox') {
+      control.checked = control.defaultChecked;
+    } else {
+      control.value = control.defaultValue;
+    }
+  }
+}
 const state = {
-  handScale: 21.8, showHand: true, edge: 10, depth: 42.5, width: 188,
-  length: 188, angle: 45, targetX: 152.9, targetY: 151.4,
-  formDriver: 'object', formRegion: 'whole', indentCount: 3, padRadius: 37,
+  handScale: DEFAULT_HAND_SCALE, objectRotation: 0, showHand: true, edge: 1.5, depth: 18.5, width: 188,
+  length: 188, angle: 45, targetX: DEFAULT_HAND_POSITION.x, targetY: DEFAULT_HAND_POSITION.y,
+  formDriver: 'object', formRegion: 'whole', indentCount: 0, linearPads: true, patternSeed: 50,
+  padDiameter: 11, padHeight: 2, padTargets: [],
   foldStyle: 'faceted', step: 0.5, showPath: true, faceSelected: true,
   yaw: -1.02, pitch: 0.41, hand: [], handBounds: null,
   objectMesh: null, objectField: null, fieldKey: '', fieldError: null, indentTargets: [],
   indentSourceIndices: [], indentSelectionKey: '', objectName: 'Loading…',
   axes: [], vertices: [], faces: [], faceCells: [], tipCells: new Set(), removedCells: new Set(), tipVertexIndices: [], contours: [], csvPoints: [],
-  maxSlope: 0, baseLoaded: false, baseError: null
+  maxSlope: 0, imprintArea: 0, baseLoaded: false, baseError: null
 };
 let topMap = null;
-let topDrag = false;
+let topDrag = null;
 let formDrag = null;
 let drawQueued = false; 
 let baseRequest = 0;
@@ -43,12 +58,12 @@ function fittedReferenceScale(bounds) {
   const available = Math.max(10, SHEET - 2 * CLAMP - 16);
   return Math.min(available / spanX, available / spanY);
 }
-function setReferenceScale(fit) {
+function setReferenceScale(fit, preferred = fit) {
   const input = $('hand-scale');
-  input.min = (fit * 0.25).toPrecision(5);
-  input.max = (fit * 3).toPrecision(5);
-  input.step = (fit / 100).toPrecision(4);
-  input.value = fit.toPrecision(6);
+  input.min = (Math.floor(fit * 2.5) / 10).toFixed(1);
+  input.max = (Math.ceil(fit * 30) / 10).toFixed(1);
+  input.step = '0.1';
+  input.value = clamp(preferred, +input.min, +input.max).toFixed(1);
   state.handScale = +input.value;
 }
 function axis(step) {
@@ -106,12 +121,15 @@ function facetedZAt(x, y) {
 }
 function refreshObjectField() {
   if (!state.objectMesh) return;
-  const key = `${SHEET}:${state.handScale}:${state.formRegion}`;
+  const key = `${SHEET}:${state.handScale}:${state.formRegion}:${state.objectRotation}`;
   if (key === state.fieldKey) return;
   try {
     state.objectField = buildObjectField(state.objectMesh, {
-      sheet: SHEET, scale: state.handScale, region: state.formRegion
+      sheet: SHEET, scale: state.handScale, region: state.formRegion,
+      rotationDegrees: state.objectRotation
     });
+    state.handBounds = state.objectField.bounds;
+    state.hand = state.objectMesh.points.filter(vertex => vertex[1] <= state.handBounds.cutoff);
     state.fieldKey = key;
     state.fieldError = null;
   } catch (error) {
@@ -121,49 +139,51 @@ function refreshObjectField() {
 }
 function objectZAt(x, y) {
   const field = state.objectField;
-  const original = state.foldStyle === 'faceted' ? facetedZAt(x, y) : smoothZAt(x, y);
-  if (!field || !state.indentTargets.length) return original;
-  const sample = sampleObjectField(field, x, y);
-  const imprint = Math.exp(-Math.pow(sample.distance / 24, 1.35));
-  const u = Math.abs(x - state.targetX) / (state.width / 2);
-  const v = Math.abs(y - state.targetY) / (state.length / 2);
-  const window = smoothstep((1 - Math.max(u, v)) / 0.22);
-  const edge = smoothstep(Math.min(x - CLAMP, y - CLAMP, SHEET - CLAMP - x, SHEET - CLAMP - y) / 20);
-  const relief = clamp((sample.height - field.zMin) / Math.max(0.001, field.zMax - field.zMin), 0, 1);
-  let pointPressure = 0;
-  for (const target of state.indentTargets) {
-    const dx = x - target.x, dy = y - target.y;
-    const shape = state.foldStyle === 'faceted'
-      ? Math.max(0, 1 - (Math.abs(dx) + Math.abs(dy)) / state.padRadius)
-      : Math.exp(-0.5 * (dx * dx + dy * dy) / (state.padRadius * state.padRadius * 0.35));
-    const height = clamp((target.z - field.zMin) / Math.max(.001, field.zMax - field.zMin), 0, 1);
-    pointPressure = Math.max(pointPressure, shape * (0.65 + 0.35 * height));
-  }
-  const handVariation = state.depth * (0.035 * imprint * (0.45 + 0.55 * relief) + 0.10 * pointPressure);
-  return Math.max(-state.depth, original - handVariation * window * edge);
+  if (!field) return 0;
+  const offsetX = state.targetX - field.center.x;
+  const offsetY = state.targetY - field.center.y;
+  const localX = x - offsetX, localY = y - offsetY;
+  const sample = sampleObjectField(field, localX, localY);
+  // The OBJ's upper visible surface supplies the shape. Only a narrow rim is
+  // blended back into the flat sheet; marker points do not deform this mesh.
+  const surface = clamp((sample.height - field.zMin) / Math.max(.001, field.zMax - field.zMin), 0, 1);
+  const silhouette = smoothstep((5 - sample.distance) / 5);
+  const clampFade = smoothstep(Math.min(x - CLAMP, y - CLAMP, SHEET - CLAMP - x, SHEET - CLAMP - y) / 6);
+  return -state.depth * surface * silhouette * clampFade;
 }
 function zAt(x, y) {
   if (!state.faceSelected || x <= CLAMP || y <= CLAMP || x >= SHEET - CLAMP || y >= SHEET - CLAMP) return 0;
-  if (state.formDriver === 'object') return objectZAt(x, y);
+  if (state.formDriver === 'object') {
+    return objectZAt(x, y) + pressurePadLift(x, y, state.padTargets, state.padDiameter / 2, state.padHeight);
+  }
   return state.foldStyle === 'faceted' ? facetedZAt(x, y) : smoothZAt(x, y);
 }
 function mesh() {
   refreshObjectField();
-  if (state.formDriver === 'object' && state.objectField) {
+  if (state.formDriver === 'object' && state.objectField && !state.linearPads && state.indentCount > 0) {
     // Keep the selected OBJ vertices fixed while scale changes. Only their
     // projection into sheet coordinates should move with the reference.
-    const selectionKey = [state.formRegion, state.indentCount, state.targetX,
-      state.targetY, state.width, state.length, SHEET, CLAMP].join(':');
+    const selectionKey = [state.formRegion, state.indentCount, SHEET, CLAMP].join(':');
     if (selectionKey !== state.indentSelectionKey) {
       const selected = chooseIndentTargets(state.objectField, state.indentCount,
-        { x: state.targetX, y: state.targetY }, state.width, state.length, CLAMP);
+        state.objectField.center, SHEET - 2 * CLAMP, SHEET - 2 * CLAMP, CLAMP);
       state.indentSourceIndices = selected.map(point => point.sourceIndex);
       state.indentSelectionKey = selectionKey;
     }
-    state.indentTargets = reprojectIndentTargets(state.objectField, state.indentSourceIndices);
+    state.indentTargets = reprojectIndentTargets(state.objectField, state.indentSourceIndices)
+      .map(point => ({ ...point,
+        x: point.x + state.targetX - state.objectField.center.x,
+        y: point.y + state.targetY - state.objectField.center.y }));
   } else {
     state.indentTargets = [];
   }
+  state.padTargets = state.formDriver === 'object' && state.faceSelected && state.objectField
+    ? state.linearPads
+      ? linearPressurePads({ sheet: SHEET, clampInset: CLAMP, diameter: state.padDiameter,
+        centerX: state.targetX, centerY: state.targetY, seed: state.patternSeed, baseAt: objectZAt })
+      : activePressurePads(state.indentTargets, {
+        sheet: SHEET, clampInset: CLAMP, radius: state.padDiameter / 2, baseAt: objectZAt
+      }) : [];
   const ax = axis(state.edge);
   state.axes = ax;
   const n = ax.length;
@@ -183,13 +203,18 @@ function mesh() {
       state.faceCells.push(j * (n - 1) + i, j * (n - 1) + i);
     }
   }
-  const tips = state.formDriver === 'object' && state.faceSelected
-    ? insertTipVertices(state.vertices, state.faces, state.faceCells,
-      state.indentTargets.map(target => ({ x: target.x, y: target.y, z: zAt(target.x, target.y) })), ax)
-    : { tipVertexIndices: [], tipCells: new Set(), removedCells: new Set() };
+  const tips = { tipVertexIndices: [], tipCells: new Set(), removedCells: new Set() };
   state.tipVertexIndices = tips.tipVertexIndices;
   state.tipCells = tips.tipCells;
   state.removedCells = tips.removedCells;
+  state.imprintArea = 0;
+  for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+    const midX = (ax[i] + ax[i + 1]) / 2;
+    const midY = (ax[j] + ax[j + 1]) / 2;
+    if ((state.formDriver === 'object' ? objectZAt(midX, midY) : zAt(midX, midY)) < -0.5) {
+      state.imprintArea += (ax[i + 1] - ax[i]) * (ax[j + 1] - ax[j]);
+    }
+  }
   let maxSlope = 0;
   for (const [ia, ib, ic] of state.faces) {
     const a = state.vertices[ia], b = state.vertices[ib], c = state.vertices[ic];
@@ -262,6 +287,7 @@ function contours() {
 function readControls() {
   const previousRegion = state.formRegion;
   state.handScale = +$('hand-scale').value;
+  state.objectRotation = +$('object-rotation').value;
   state.showHand = $('show-hand').checked;
   state.formDriver = $('form-driver').value;
   state.formRegion = $('form-region').value;
@@ -269,26 +295,37 @@ function readControls() {
   state.foldStyle = $('fold-style').value;
   state.depth = +$('depth').value;
   state.indentCount = +$('indent-count').value;
-  state.padRadius = +$('pad-radius').value;
+  state.linearPads = $('linear-pads').checked;
+  state.patternSeed = +$('pattern-seed').value;
+  state.padDiameter = +$('pad-diameter').value;
+  state.padHeight = +$('pad-height').value;
   state.width = +$('width').value;
   state.length = +$('length').value;
   state.angle = +$('angle').value;
   if (state.formRegion !== previousRegion && state.objectMesh) {
+    setReferenceScale(fittedReferenceScale(objectRegionBounds(state.objectMesh, state.formRegion)));
+    state.handScale = +$('hand-scale').value;
     refreshObjectField();
     if (state.objectField) {
       $('target-x').value = clamp(state.objectField.center.x, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
       $('target-y').value = clamp(state.objectField.center.y, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
     }
   }
-  state.targetX = clamp(+$('target-x').value || 152.9, CLAMP, SHEET - CLAMP);
-  state.targetY = clamp(+$('target-y').value || 151.4, CLAMP, SHEET - CLAMP);
+  const positionMin = state.formDriver === 'object' ? 0 : CLAMP;
+  const positionMax = state.formDriver === 'object' ? SHEET : SHEET - CLAMP;
+  state.targetX = clamp(Number($('target-x').value), positionMin, positionMax);
+  state.targetY = clamp(Number($('target-y').value), positionMin, positionMax);
   state.step = +$('step').value;
   state.showPath = $('show-path').checked;
   $('hand-scale-value').value = `${+state.handScale.toPrecision(3)} mm/unit`;
+  $('object-rotation-value').value = `${state.objectRotation}°`;
   $('edge-value').value = state.edge + ' mm';
   $('depth-value').value = state.depth + ' mm';
   $('indent-count-value').value = String(state.indentCount);
-  $('pad-radius-value').value = state.padRadius + ' mm';
+  $('linear-pads-value').value = state.linearPads ? 'ON' : 'OFF';
+  $('pattern-seed-value').value = String(state.patternSeed);
+  $('pad-diameter-value').value = state.padDiameter + ' mm';
+  $('pad-height-value').value = state.padHeight + ' mm';
   $('width-value').value = state.width + ' mm';
   $('length-value').value = state.length + ' mm';
   $('angle-value').value = state.angle + '°';
@@ -305,9 +342,14 @@ function updateReadouts() {
   $('stat-source').textContent = state.objectName;
   $('stat-vertices').textContent = state.objectMesh ? state.objectMesh.vertices.length.toLocaleString() : '—';
   $('stat-faces').textContent = state.objectMesh ? state.objectMesh.faces.length.toLocaleString() : '—';
-  $('stat-region').textContent = state.formRegion === 'lower' ? 'Lower-Y end' : 'Whole OBJ';
-  $('stat-targets').textContent = state.formDriver === 'manual' ? '1 manual' : `${state.indentTargets.length} / ${state.indentCount}`;
-  $('stat-area').textContent = state.objectField ? `${(state.objectField.footprint / 100).toFixed(1)} cm²` : '—';
+  $('stat-region').textContent = state.formRegion === 'wrist-palm' ? 'Wrist + palm'
+    : state.formRegion === 'lower' ? 'Lower-Y end' : 'Whole OBJ';
+  $('stat-targets').textContent = state.formDriver === 'manual' ? '—'
+    : state.linearPads ? 'Linear layout' : `${state.indentTargets.length} / ${state.indentCount}`;
+  $('stat-pads').textContent = state.formDriver === 'manual' ? '—'
+    : state.linearPads ? `${state.padTargets.length} evenly spaced` : `${state.padTargets.length} / ${state.indentTargets.length}`;
+  $('stat-pad-size').textContent = state.formDriver === 'manual' ? '—' : `${state.padDiameter} × ${state.padHeight} mm`;
+  $('stat-area').textContent = state.objectField ? `${(state.imprintArea / 100).toFixed(1)} cm²` : '—';
   $('stat-clamp').textContent = `${CLAMP.toFixed(1)} mm`;
   $('stat-sheet-faces').textContent = state.faces.length.toLocaleString();
   $('stat-depth').textContent = `${maxDepth.toFixed(1)} mm`;
@@ -326,18 +368,21 @@ function updateReadouts() {
   } else if (!state.hand.length) {
     status.textContent = 'Loading hand reference…';
     status.classList.remove('warn');
-  } else if (state.formDriver === 'object' && (state.fieldError || !state.indentTargets.length)) {
-    status.textContent = state.fieldError || 'No OBJ surface falls inside the selected forming zone. Move the target or increase its width/length.';
+  } else if (state.formDriver === 'object' && (state.fieldError || !state.objectField)) {
+    status.textContent = state.fieldError || 'No OBJ surface falls inside the forming area. Check the reference scale.';
+    status.classList.add('warn');
+  } else if (state.formDriver === 'object' && state.imprintArea < 1) {
+    status.textContent = 'The OBJ is outside the formable face. Drag it over the inner plate in the top view.';
     status.classList.add('warn');
   } else if (!state.faceSelected) {
     status.textContent = 'Select the central face in the top view.';
     status.classList.add('warn');
   } else if (state.maxSlope > state.angle) {
-    status.textContent = 'Slope exceeds ' + state.angle + '° setting. Reduce depth or widen the fold.';
+    status.textContent = 'Slope exceeds ' + state.angle + '° setting. The imprint or raised pads may be too steep to form; reduce depth or pad height and review with the instructor.';
     status.classList.add('warn');
   } else {
     status.textContent = state.formDriver === 'object'
-      ? 'Original basin with subtle OBJ influence. Confirm scale and forming feasibility with the instructor.'
+      ? 'Dense OBJ surface imprint preview. Confirm scale and forming feasibility with the instructor.'
       : 'Manual preview within angle setting. Reference scale still needs confirmation.';
     status.classList.remove('warn');
   }
@@ -351,7 +396,8 @@ function updateProfileGraph() {
     const depthY = 16 + clamp(-zAt(x, state.targetY) / Math.max(1, state.depth), 0, 1) * 43;
     sheet.push(`${index ? 'L' : 'M'}${graphX.toFixed(1)} ${depthY.toFixed(1)}`);
     if (state.formDriver !== 'object' || !state.objectField) continue;
-    const sample = sampleObjectField(state.objectField, x, state.targetY);
+    const sample = sampleObjectField(state.objectField,
+      x - state.targetX + state.objectField.center.x, state.objectField.center.y);
     if (sample.distance > 12) { startedReference = false; continue; }
     const relief = clamp((sample.height - state.objectField.zMin) /
       Math.max(.001, state.objectField.zMax - state.objectField.zMin), 0, 1);
@@ -413,7 +459,7 @@ function foldCreases() {
   return lines;
 }
 function drawCreases(ctx, mapPoint, opacity) {
-  if (state.foldStyle !== 'faceted' || !state.faceSelected) return;
+  if (state.formDriver === 'object' || state.foldStyle !== 'faceted' || !state.faceSelected) return;
   ctx.strokeStyle = `rgba(235,232,225,${opacity})`;
   ctx.lineWidth = 1.3;
   for (const [a, b] of foldCreases()) {
@@ -422,14 +468,50 @@ function drawCreases(ctx, mapPoint, opacity) {
   }
 }
 function handPoint(v) {
+  const field = state.objectField;
+  const [x, y, z] = rotateReferenceVertex(v, state.objectRotation, field.rotationCenter);
   const midX = (state.handBounds.minX + state.handBounds.maxX) / 2;
   const midY = (state.handBounds.minY + state.handBounds.maxY) / 2;
-  const midZ = (state.handBounds.minZ + state.handBounds.maxZ) / 2;
   return {
-    x: SHEET / 2 + (v[0] - midX) * state.handScale,
-    y: SHEET / 2 + (v[1] - midY) * state.handScale,
-    z: 20 + (v[2] - midZ) * state.handScale * 0.55
+    x: state.targetX + SHEET / 2 + (x - midX) * state.handScale - field.center.x,
+    y: state.targetY + SHEET / 2 + (y - midY) * state.handScale - field.center.y,
+    // Keep the rotated side nearest the sheet just above its unformed plane.
+    z: 6 + (field.zMax - z) * state.handScale
   };
+}
+function drawPadRings(ctx, mapPoint) {
+  if (state.formDriver !== 'object' || !state.padTargets.length) return;
+  ctx.save();
+  for (const target of state.padTargets) {
+    for (const [fraction, color, lineWidth] of [
+      [1, withAlpha(MAUVE, .85), 1.2],
+      [.55, withAlpha(BLUE, .95), 1.4]
+    ]) {
+      const radius = state.padDiameter / 2 * fraction;
+      ctx.beginPath();
+      for (let step = 0; step <= 48; step++) {
+        const angle = step / 48 * Math.PI * 2;
+        const x = target.x + Math.cos(angle) * radius;
+        const y = target.y + Math.sin(angle) * radius;
+        const point = mapPoint(x, y, zAt(x, y) + .5);
+        if (step === 0) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.stroke();
+    }
+    if (state.linearPads) {
+      const point = mapPoint(target.x, target.y, zAt(target.x, target.y) + 1);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = BLUE;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#141414';
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 function drawForm() {
   const { ctx, w, h } = fitCanvas(formCanvas);
@@ -469,9 +551,10 @@ function drawForm() {
   cells.sort((a, b) => a.order - b.order);
   ctx.lineWidth = .65;
   for (const cell of cells) {
-    const directional = state.foldStyle === 'faceted' ? clamp(cell.light, -30, 30) : 0;
+    const directional = clamp(cell.light, -30, 30);
     const shade = Math.round(69 + clamp(-cell.z / Math.max(1, state.depth), 0, 1) * 53 + directional);
-    const grid = cell.tip ? 'rgba(238,235,229,.4)'
+    const grid = state.formDriver === 'object' ? 'rgba(238,235,229,.025)'
+      : cell.tip ? 'rgba(238,235,229,.4)'
       : state.foldStyle === 'faceted' ? 'rgba(238,235,229,.055)' : 'rgba(238,235,229,.13)';
     polygon(ctx, cell.points, `rgb(${shade},${shade + 1},${shade + 2})`, grid);
   }
@@ -487,8 +570,9 @@ function drawForm() {
     }
   }
   if (state.showPath) {
-    ctx.lineWidth = state.foldStyle === 'faceted' ? .85 : 1.15;
-    ctx.strokeStyle = state.foldStyle === 'faceted' ? withAlpha(MAUVE, .33) : withAlpha(MAUVE, .83);
+    const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
+    ctx.lineWidth = faintManual ? .85 : 1.15;
+    ctx.strokeStyle = withAlpha(MAUVE, faintManual ? .33 : .83);
     for (const line of state.contours) {
       ctx.beginPath();
       for (let i = 0; i < line.length; i++) {
@@ -498,6 +582,7 @@ function drawForm() {
       ctx.stroke();
     }
   }
+  drawPadRings(ctx, (x, y, z) => project(x, y, z, w, h));
   if (state.formDriver === 'object' && state.showHand) {
     ctx.lineWidth = 1;
     ctx.strokeStyle = withAlpha(BLUE, .55);
@@ -527,7 +612,9 @@ function drawForm() {
 function drawTop() {
   const { ctx, w, h } = fitCanvas(topCanvas);
   ctx.fillStyle = '#121314'; ctx.fillRect(0,0,w,h);
-  const size = Math.min(h - 28, w - 36);
+  // Leave room around the plate so the rest of the full hand remains visible
+  // while only its wrist or palm overlaps the formable square.
+  const size = Math.min(h - 28, w - 36) * 0.74;
   const ox = (w - size) / 2, oy = (h - size) / 2;
   topMap = { ox, oy, size };
   const map = (x,y) => ({ x: ox + x / SHEET * size, y: oy + (SHEET-y) / SHEET * size });
@@ -561,7 +648,8 @@ function drawTop() {
     }), null, ctx.strokeStyle);
   }
   if (state.showPath) {
-    ctx.strokeStyle = state.foldStyle === 'faceted' ? withAlpha(MAUVE, .18) : withAlpha(MAUVE, .35);
+    const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
+    ctx.strokeStyle = withAlpha(MAUVE, faintManual ? .18 : .55);
     ctx.lineWidth = 1;
     for (const line of state.contours) {
       ctx.beginPath();
@@ -569,6 +657,7 @@ function drawTop() {
       ctx.stroke();
     }
   }
+  drawPadRings(ctx, (x, y) => map(x, y));
   const target = map(state.targetX,state.targetY);
   ctx.fillStyle = BLUE; ctx.beginPath(); ctx.arc(target.x,target.y,7,0,Math.PI*2); ctx.fill();
   ctx.strokeStyle = '#141414'; ctx.lineWidth = 2; ctx.stroke();
@@ -606,26 +695,30 @@ function applyReference(text, name) {
   const reference = parseReferenceObj(text);
   const custom = !name.startsWith('Default:');
   const region = 'whole';
-  setReferenceScale(fittedReferenceScale(reference.bounds));
-  const field = buildObjectField(reference, { sheet: SHEET, scale: state.handScale, region });
-  state.hand = reference.points;
-  state.handBounds = reference.bounds;
+  setReferenceScale(fittedReferenceScale(objectRegionBounds(reference, region)),
+    custom ? undefined : DEFAULT_HAND_SCALE);
+  const field = buildObjectField(reference, { sheet: SHEET, scale: state.handScale, region,
+    rotationDegrees: state.objectRotation });
+  state.hand = reference.points.filter(vertex => vertex[1] <= field.bounds.cutoff);
+  state.handBounds = field.bounds;
   state.objectMesh = reference;
   state.objectField = field;
   state.indentSourceIndices = [];
   state.indentSelectionKey = '';
   state.formRegion = region;
-  state.fieldKey = `${SHEET}:${state.handScale}:${region}`;
+  state.fieldKey = `${SHEET}:${state.handScale}:${region}:${state.objectRotation}`;
   state.fieldError = null;
   state.objectName = name.replace(/^Default: /, '');
   $('form-region').value = region;
-  $('target-x').value = clamp(field.center.x, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
-  $('target-y').value = clamp(field.center.y, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
+  $('target-x').value = custom ? clamp(field.center.x, 0, SHEET).toFixed(1)
+    : DEFAULT_HAND_POSITION.x.toFixed(1);
+  $('target-y').value = custom ? clamp(field.center.y, 0, SHEET).toFixed(1)
+    : DEFAULT_HAND_POSITION.y.toFixed(1);
   $('reference-legend').textContent = custom ? '○ object reference' : '○ hand scan reference';
   $('reference-scale-label').textContent = custom ? 'Object scale' : 'Hand scale';
   $('reference-note').textContent = custom
-    ? 'The original basin stays intact while the loaded OBJ adds subtle local depth variation. The grey points show its geometry; check units and orientation before fabrication.'
-    : 'The original basin stays intact while the full hand OBJ subtly changes its depth from fingers through palm and wrist. Confirm the scan scale before fabrication.';
+    ? 'Rotate the loaded OBJ to choose which side faces the sheet. Check units, orientation, and undercuts before fabrication.'
+    : 'At 0°, the scan\'s high-Z side faces the sheet. Rotate 180° to preview the opposite side. Only the portion over the formable plate imprints it.';
   $('form-view').setAttribute('aria-label', 'Perspective preview of OBJ-driven sheet forming');
   const label = $('object-file-status');
   label.textContent = `${name} · ${reference.vertices.length.toLocaleString()} vertices`;
@@ -644,20 +737,16 @@ function applyBase(text, name) {
     $(id).value = Math.min(+$(id).value, formableWidth).toFixed(1);
   }
   for (const id of ['target-x', 'target-y']) {
-    $(id).min = CLAMP.toFixed(1);
-    $(id).max = (SHEET - CLAMP).toFixed(1);
-    $(id).value = clamp(+$(id).value, CLAMP, SHEET - CLAMP).toFixed(1);
+    $(id).min = '0';
+    $(id).max = SHEET.toFixed(1);
+    $(id).value = clamp(+$(id).value, 0, SHEET).toFixed(1);
   }
   $('sheet-size').textContent = `${SHEET.toFixed(1)} × ${SHEET.toFixed(1)} MM`;
   $('clamp-readout').textContent = `The loaded base OBJ sets a ${CLAMP.toFixed(1)} mm flat clamping border. Click inside the top view to select its central face.`;
   if (state.objectMesh) {
-    setReferenceScale(fittedReferenceScale(state.objectMesh.bounds));
+    setReferenceScale(fittedReferenceScale(objectRegionBounds(state.objectMesh, state.formRegion)), state.handScale);
     state.fieldKey = '';
     refreshObjectField();
-    if (state.objectField) {
-      $('target-x').value = clamp(state.objectField.center.x, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
-      $('target-y').value = clamp(state.objectField.center.y, CLAMP + 5, SHEET - CLAMP - 5).toFixed(1);
-    }
   }
   const label = $('base-file-status');
   label.textContent = name;
@@ -667,10 +756,10 @@ function applyBase(text, name) {
 async function loadHand() {
   const request = ++referenceRequest;
   try {
-    const response = await fetch('../../references/3D/HAND_clean_mesh.obj');
+    const response = await fetch('../../references/3D/HAND_new_preview.obj?v=20261017');
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const text = await response.text();
-    if (request === referenceRequest) applyReference(text, 'Default: HAND_clean_mesh.obj');
+    if (request === referenceRequest) applyReference(text, 'Default: hand_new.obj (optimized preview)');
   } catch (error) {
     if (request !== referenceRequest) return;
     $('status').textContent = 'Hand reference unavailable: ' + error.message;
@@ -725,7 +814,20 @@ topCanvas.addEventListener('pointerdown', (event) => {
   const px = event.clientX - rect.left, py = event.clientY - rect.top;
   const tx = topMap.ox + state.targetX / SHEET * topMap.size;
   const ty = topMap.oy + (SHEET - state.targetY) / SHEET * topMap.size;
-  if (Math.hypot(px-tx,py-ty) < 18) { topDrag = true; topCanvas.setPointerCapture(event.pointerId); return; }
+  let onReference = false;
+  if (state.formDriver === 'object' && state.showHand && state.handBounds) {
+    for (let i = 0; i < state.hand.length; i += 3) {
+      const point = handPoint(state.hand[i]);
+      const x = topMap.ox + point.x / SHEET * topMap.size;
+      const y = topMap.oy + (SHEET - point.y) / SHEET * topMap.size;
+      if (Math.hypot(px - x, py - y) < 10) { onReference = true; break; }
+    }
+  }
+  if (Math.hypot(px-tx,py-ty) < 18 || onReference) {
+    topDrag = { x: px, y: py, targetX: state.targetX, targetY: state.targetY };
+    topCanvas.setPointerCapture(event.pointerId);
+    return;
+  }
   const x = (px - topMap.ox) / topMap.size * SHEET;
   const y = SHEET - (py - topMap.oy) / topMap.size * SHEET;
   state.faceSelected = x >= CLAMP && x <= SHEET-CLAMP && y >= CLAMP && y <= SHEET-CLAMP;
@@ -734,13 +836,15 @@ topCanvas.addEventListener('pointerdown', (event) => {
 topCanvas.addEventListener('pointermove', (event) => {
   if (!topDrag || !topMap) return;
   const rect = topCanvas.getBoundingClientRect();
-  const x = clamp((event.clientX - rect.left - topMap.ox) / topMap.size * SHEET, CLAMP+1, SHEET-CLAMP-1);
-  const y = clamp(SHEET - (event.clientY - rect.top - topMap.oy) / topMap.size * SHEET, CLAMP+1, SHEET-CLAMP-1);
+  const min = state.formDriver === 'object' ? 0 : CLAMP + 1;
+  const max = state.formDriver === 'object' ? SHEET : SHEET - CLAMP - 1;
+  const x = clamp(topDrag.targetX + (event.clientX - rect.left - topDrag.x) / topMap.size * SHEET, min, max);
+  const y = clamp(topDrag.targetY - (event.clientY - rect.top - topDrag.y) / topMap.size * SHEET, min, max);
   $('target-x').value = x.toFixed(1); $('target-y').value = y.toFixed(1);
   readControls();
 });
-topCanvas.addEventListener('pointerup', () => { topDrag = false; });
-topCanvas.addEventListener('pointercancel', () => { topDrag = false; });
+topCanvas.addEventListener('pointerup', () => { topDrag = null; });
+topCanvas.addEventListener('pointercancel', () => { topDrag = null; });
 formCanvas.addEventListener('pointerdown', (event) => {
   formDrag = { x: event.clientX, y: event.clientY, yaw: state.yaw, pitch: state.pitch };
   formCanvas.setPointerCapture(event.pointerId);
@@ -754,6 +858,7 @@ formCanvas.addEventListener('pointermove', (event) => {
 formCanvas.addEventListener('pointerup', () => { formDrag = null; });
 formCanvas.addEventListener('pointercancel', () => { formDrag = null; });
 window.addEventListener('resize', scheduleDraw);
+resetControlsToDefaults();
 readControls();
 loadBase();
 loadHand();

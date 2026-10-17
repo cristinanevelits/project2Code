@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SheetFormer — Hand Study</title>
-  <meta name="description" content="Local design preview for an incremental sheet-forming hand study.">
+  <meta name="description" content="Local design preview for a high-resolution wrist and palm sheet imprint.">
   <link rel="stylesheet" href="./style.css?v=responsive-20261014">
-  <link rel="stylesheet" href="./object-form.css">
+  <link rel="stylesheet" href="./object-form.css?v=linear-switch-20261017">
 </head>
 <body>
   <header class="topbar">
@@ -19,7 +19,7 @@
         <p class="eyebrow">01 / FORM STUDY</p>
         <h1>Shape the sheet<br><em>toward the hand.</em></h1>
       </div>
-      <p class="intro-copy">A 12 × 12 in sheet study guided by the complete hand OBJ. Adjust the indentation points and depth, then inspect the preview before discussing fabrication with the instructor.</p>
+      <p class="intro-copy">A 12 × 12 in sheet study using the full hand scan. Rotate the OBJ to preview either side against the sheet, then drag it in the top view to choose how much of the wrist or palm falls over the formable plate.</p>
     </section>
     <section class="workspace">
       <div class="views">
@@ -33,33 +33,37 @@
           </div>
         </div>
         <div class="view-footer"><span>● formed sheet</span><span id="reference-legend">○ hand scan reference</span><span>— selected toolpath</span></div>
-        <div class="view-head secondary"><span>TOP / TARGET PLACEMENT <small>drag center point · influence points auto-placed</small></span><span id="sheet-size">304.8 × 304.8 MM</span></div>
-        <canvas id="top-view" aria-label="Top view showing clamp zone and draggable form target"></canvas>
-        <p class="canvas-note" id="reference-note">The original basin stays intact while the full hand OBJ subtly changes its depth from fingers through palm and wrist. This is a design preview, not a collision or material simulation.</p>
+        <div class="view-head secondary"><span>TOP / OBJECT PLACEMENT <small>drag the hand or blue center point</small></span><span id="sheet-size">304.8 × 304.8 MM</span></div>
+        <canvas id="top-view" aria-label="Top view showing clamp zone and draggable hand reference"></canvas>
+        <p class="canvas-note" id="reference-note">At 0°, the scan's high-Z side faces the sheet. Rotate 180° to preview the opposite side. Only the portion over the formable plate imprints it.</p>
       </div>
       <aside class="controls">
         <div class="panel-title"><span>PARAMETERS</span><span>( EDITABLE )</span></div>
         <div class="status" id="status">Loading geometry…</div>
         <fieldset>
           <legend>01 / REFERENCE</legend>
-          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">21.8 mm/unit</output></label>
-          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="21.8">
+          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">15.6 mm/unit</output></label>
+          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="15.6">
           <p class="hint">Scale affects both the reference and the fitted sheet. OBJ units are unspecified.</p>
+          <label class="row" for="object-rotation"><span>Rotate OBJ around wrist–finger axis</span><output id="object-rotation-value">0°</output></label>
+          <input id="object-rotation" type="range" min="0" max="360" step="1" value="0" aria-label="Rotate OBJ around wrist-to-finger axis">
+          <p class="hint">0° shows the current side; 180° turns the opposite side toward the sheet (the palm, if this scan is oriented as expected). The preview, projected points, and imprint rotate together.</p>
           <label class="row"><span>Reference visibility</span><input id="show-hand" type="checkbox" checked></label>
           <button class="load-obj" id="load-object-button" type="button">LOAD OBJECT OBJ</button>
           <input class="file-input" id="object-file" type="file" accept=".obj" aria-label="Choose an OBJ reference object">
-          <p class="hint file-status" id="object-file-status" role="status">Default: HAND_clean_mesh.obj</p>
+          <p class="hint file-status" id="object-file-status" role="status">Default: hand_new.obj (optimized preview)</p>
           <label class="row" for="form-driver"><span>Form driver</span></label>
           <select id="form-driver" aria-label="Form driver">
-            <option value="object" selected>Original basin + OBJ influence</option>
+            <option value="object" selected>High-resolution OBJ imprint</option>
             <option value="manual">Manual shape (previous)</option>
           </select>
           <label class="row" for="form-region"><span>OBJ region</span></label>
           <select id="form-region" aria-label="OBJ region">
             <option value="whole" selected>Whole OBJ</option>
+            <option value="wrist-palm">Wrist + near palm</option>
             <option value="lower">Lower-Y end / wrist</option>
           </select>
-          <p class="hint">Whole OBJ uses fingers, palm, and wrist. The lower-Y option isolates this hand's wrist.</p>
+          <p class="hint">At 0°, the scan's high-Z side faces the sheet. Verify its anatomical orientation before fabrication. Drag in the top view to choose the area.</p>
         </fieldset>
         <fieldset>
           <legend>02 / FORMABLE FACE</legend>
@@ -67,31 +71,38 @@
           <button class="load-obj" id="load-base-button" type="button">LOAD BASE PLATE OBJ</button>
           <input class="file-input" id="base-file" type="file" accept=".obj" aria-label="Choose an OBJ base plate">
           <p class="hint file-status" id="base-file-status" role="status">Default: basePlate.obj</p>
-          <label class="row"><span>Target edge length</span><output id="edge-value">10 mm</output></label>
-          <input id="edge" type="range" min="4" max="20" step="1" value="10">
+          <label class="row"><span>Sheet mesh spacing</span><output id="edge-value">1.5 mm</output></label>
+          <input id="edge" type="range" min="1" max="8" step="0.5" value="1.5">
           <label class="row"><span>Active face</span><strong id="face-value">CENTRAL</strong></label>
         </fieldset>
         <fieldset>
           <legend>03 / FOLD TARGET</legend>
-          <label class="row" for="fold-style"><span>Fold language</span></label>
+          <label class="row" for="fold-style"><span>Manual fold language</span></label>
           <select id="fold-style" aria-label="Fold language">
             <option value="faceted" selected>Triangulated pleats</option>
             <option value="smooth">Original smooth shape</option>
           </select>
-          <label class="row"><span>Depth below sheet</span><output id="depth-value">42.5 mm</output></label>
-          <input id="depth" type="range" min="2" max="70" step="0.5" value="42.5">
-          <label class="row"><span>OBJ influence points</span><output id="indent-count-value">3</output></label>
-          <input id="indent-count" type="range" min="1" max="12" step="1" value="3">
-          <label class="row"><span>Indent radius</span><output id="pad-radius-value">37 mm</output></label>
-          <input id="pad-radius" type="range" min="10" max="70" step="1" value="37">
-          <label class="row"><span>Form zone width</span><output id="width-value">188 mm</output></label>
+          <label class="row"><span>Depth below sheet</span><output id="depth-value">18.5 mm</output></label>
+          <input id="depth" type="range" min="2" max="70" step="0.5" value="18.5">
+          <label class="row"><span>OBJ-picked pressure points</span><output id="indent-count-value">0</output></label>
+          <input id="indent-count" type="range" min="0" max="12" step="1" value="0">
+          <label class="row pattern-switch-row"><span>Linear pad pattern</span><span class="pattern-switch-control"><output id="linear-pads-value">ON</output><input id="linear-pads" type="checkbox" role="switch" aria-label="Linear pad pattern" checked><span class="pattern-switch-track" aria-hidden="true"></span></span></label>
+          <label class="row" for="pattern-seed"><span>Pattern seed</span><output id="pattern-seed-value">50</output></label>
+          <input id="pattern-seed" type="range" min="0" max="100" step="1" value="50" aria-label="Shift linear pad pattern across the imprint">
+          <p class="hint">Slide the seed to shift the aligned rows across the imprint. 50 keeps the original placement; this affects only the linear pattern.</p>
+          <p class="hint">OFF uses the selected OBJ points (set their count to 0 for no pads). ON replaces them with evenly spaced rows of pads wherever a full circle fits inside the imprint.</p>
+          <label class="row"><span>Contact circle diameter</span><output id="pad-diameter-value">11 mm</output></label>
+          <input id="pad-diameter" type="range" min="8" max="30" step="1" value="11" aria-label="Contact circle diameter">
+          <label class="row"><span>Extrude toward hand</span><output id="pad-height-value">2 mm</output></label>
+          <input id="pad-height" type="range" min="0" max="15" step="0.5" value="2" aria-label="Contact pad extrusion height">
+          <label class="row"><span>Manual zone width</span><output id="width-value">188 mm</output></label>
           <input id="width" type="range" min="35" max="190" step="1" value="188">
-          <label class="row"><span>Form zone length</span><output id="length-value">188 mm</output></label>
+          <label class="row"><span>Manual zone length</span><output id="length-value">188 mm</output></label>
           <input id="length" type="range" min="45" max="190" step="1" value="188">
           <label class="row"><span>Maximum face angle</span><output id="angle-value">45°</output></label>
           <input id="angle" type="range" min="15" max="60" step="1" value="45">
-          <div class="coordinate"><label>Target X <input id="target-x" type="number" min="57.4" max="247.4" step="0.1" value="152.9"></label><label>Target Y <input id="target-y" type="number" min="57.4" max="247.4" step="0.1" value="151.4"></label></div>
-          <p class="hint">Each T marker is a projected vertex from the loaded OBJ. Its triangular sheet tip moves with that vertex; adding points adds more facets. This remains a design preview, not a robot-ready path.</p>
+          <div class="coordinate"><label>Object X <input id="target-x" type="number" min="0" max="304.8" step="0.1" value="152.8"></label><label>Object Y <input id="target-y" type="number" min="0" max="304.8" step="0.1" value="220.4"></label></div>
+          <p class="hint">Pads stay inside the clamp border. These are geometry previews, not verified pressure-point locations or safe contact forces. Manual fold and zone controls affect only Manual shape.</p>
         </fieldset>
         <fieldset>
           <legend>04 / TOOLPATH PREVIEW</legend>
@@ -126,8 +137,10 @@
           <div class="metric"><span>Region</span><strong id="stat-region">Whole OBJ</strong></div>
         </div>
         <div class="metric-group"><h2>02 / OBJ INFLUENCE</h2>
-          <div class="metric"><span>Targets placed</span><strong id="stat-targets">—</strong></div>
-          <div class="metric"><span>Projected area</span><strong id="stat-area">—</strong></div>
+          <div class="metric"><span>Reference markers</span><strong id="stat-targets">—</strong></div>
+          <div class="metric"><span>Contact pad sites</span><strong id="stat-pads">—</strong></div>
+          <div class="metric"><span>Pad diameter × height</span><strong id="stat-pad-size">—</strong></div>
+          <div class="metric"><span>Imprint area on plate</span><strong id="stat-area">—</strong></div>
           <div class="metric"><span>Clamp inset</span><strong id="stat-clamp">57.4 mm</strong></div>
         </div>
         <div class="metric-group"><h2>03 / FORM</h2>
@@ -144,6 +157,6 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="./app.js?v=obj-driven-local-1"></script>
+  <script type="module" src="./app.js?v=linear-pad-2mm-20261017"></script>
 </body>
 </html>

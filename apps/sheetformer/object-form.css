@@ -1,9 +1,19 @@
 .workspace{grid-template-columns:minmax(0,1fr) 350px 220px}
 input[type=range]{accent-color:var(--pulse)}
 input[type=checkbox]{accent-color:var(--detail)}
+.pattern-switch-row{margin:10px 0 12px;cursor:pointer}
+.pattern-switch-control{display:inline-flex;align-items:center;gap:10px;position:relative;flex:none}
+.pattern-switch-control output{min-width:26px;text-align:right}
+.pattern-switch-control input{position:absolute;right:0;width:42px;height:24px;margin:0;opacity:0;cursor:pointer;z-index:1}
+.pattern-switch-track{display:inline-block;width:42px;height:24px;border:1px solid var(--rule);border-radius:20px;background:var(--panel2);position:relative;transition:background .15s,border-color .15s}
+.pattern-switch-track:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:transform .15s,background .15s}
+.pattern-switch-control input:checked + .pattern-switch-track{background:var(--detail);border-color:var(--detail)}
+.pattern-switch-control input:checked + .pattern-switch-track:after{transform:translateX(18px);background:var(--bg)}
+.pattern-switch-control input:focus-visible + .pattern-switch-track{outline:2px solid var(--detail2);outline-offset:3px}
 .brand-mark:after,.signal{background:var(--detail)}
 .load-obj:hover,.load-obj:focus-visible,.actions button:hover,.file-status.error,.status.warn{border-color:var(--detail);color:var(--detail)}
 .form-stage{position:relative;overflow:hidden}
+#top-view{height:420px}
 .depth-hero{position:absolute;top:18px;left:18px;display:flex;flex-direction:column;pointer-events:none;text-shadow:0 2px 10px var(--bg)}
 .depth-hero-label,.depth-hero-caption{font:9px ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;color:var(--muted)}
 .depth-hero-value{font:400 clamp(42px,5vw,74px)/.95 Georgia,serif;letter-spacing:-.06em;color:var(--detail);font-variant-numeric:tabular-nums}

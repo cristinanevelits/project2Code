@@ -1,13 +1,48 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+// The default hand scan runs from wrist (minimum Y) toward fingertips.
+// Keep the wrist and the near edge of the palm, but not the fingers.
+export function objectRegionBounds(mesh, region) {
+  const cutoff = region === 'wrist-palm'
+    ? mesh.bounds.minY + (mesh.bounds.maxY - mesh.bounds.minY) * 0.46
+    : region === 'lower'
+      ? mesh.bounds.minY + (mesh.bounds.maxY - mesh.bounds.minY) * 0.32
+      : Infinity;
+  const selected = mesh.vertices.filter(vertex => vertex[1] <= cutoff);
+  if (!selected.length) throw new Error('No vertices in the selected OBJ region');
+  const result = { cutoff, minX: Infinity, maxX: -Infinity, minY: Infinity,
+    maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
+  for (const [x, y, z] of selected) {
+    result.minX = Math.min(result.minX, x); result.maxX = Math.max(result.maxX, x);
+    result.minY = Math.min(result.minY, y); result.maxY = Math.max(result.maxY, y);
+    result.minZ = Math.min(result.minZ, z); result.maxZ = Math.max(result.maxZ, z);
+  }
+  return result;
+}
+
+// Rotate around the OBJ's long Y axis (wrist to fingertips). At 180° the
+// opposite, palm-side surface faces the sheet instead of the default back.
+export function rotateReferenceVertex([x, y, z], degrees, center) {
+  const radians = (degrees % 360) * Math.PI / 180;
+  const cosine = Math.cos(radians), sine = Math.sin(radians);
+  const dx = x - center.x, dz = z - center.z;
+  return [center.x + dx * cosine + dz * sine, y,
+    center.z - dx * sine + dz * cosine];
+}
+
 // A downward, single-valued forming preview: ray-project the OBJ triangles onto
 // the sheet. This cannot model undercuts, plastic strain, or tool collisions.
-export function buildObjectField(mesh, { sheet, scale, region, resolution = 129 }) {
-  const { vertices, faces, bounds } = mesh;
+export function buildObjectField(mesh, { sheet, scale, region, rotationDegrees = 0, resolution = 385 }) {
+  const { vertices, faces } = mesh;
+  const bounds = objectRegionBounds(mesh, region);
   const midX = (bounds.minX + bounds.maxX) / 2;
   const midY = (bounds.minY + bounds.maxY) / 2;
-  const cutoff = region === 'lower' ? bounds.minY + (bounds.maxY - bounds.minY) * 0.32 : Infinity;
-  const xy = vertices.map(([x, y, z]) => [sheet / 2 + (x - midX) * scale, sheet / 2 + (y - midY) * scale, z]);
+  const rotationCenter = { x: midX, z: (bounds.minZ + bounds.maxZ) / 2 };
+  const cutoff = bounds.cutoff;
+  const xy = vertices.map(vertex => {
+    const [x, y, z] = rotateReferenceVertex(vertex, rotationDegrees, rotationCenter);
+    return [sheet / 2 + (x - midX) * scale, sheet / 2 + (y - midY) * scale, z];
+  });
   const projectedVertices = [];
   const stride = sheet / (resolution - 1);
   const top = new Float32Array(resolution * resolution);
@@ -23,7 +58,7 @@ export function buildObjectField(mesh, { sheet, scale, region, resolution = 129 
     minY = Math.min(minY, y); maxY = Math.max(maxY, y);
   }
   if (!Number.isFinite(zMin)) throw new Error('No vertices in the selected OBJ region');
-  const yLimit = region === 'lower' ? sheet / 2 + (cutoff - midY) * scale : Infinity;
+  const yLimit = Number.isFinite(cutoff) ? sheet / 2 + (cutoff - midY) * scale : Infinity;
   const put = (i, j, z) => {
     if (i < 0 || j < 0 || i >= resolution || j >= resolution || j * stride > yLimit) return;
     const index = j * resolution + i;
@@ -83,12 +118,16 @@ export function buildObjectField(mesh, { sheet, scale, region, resolution = 129 
     if (i < resolution - 1 && j < resolution - 1) adopt(k, k + resolution + 1, stride * Math.SQRT2);
     if (i && j < resolution - 1) adopt(k, k + resolution - 1, stride * Math.SQRT2);
   }
-  return { sheet, resolution, stride, distance, nearest, occupied, projectedVertices, zMin, zMax,
+  return { sheet, resolution, stride, top, distance, nearest, occupied, projectedVertices, zMin, zMax, bounds, scale,
+    rotationDegrees, rotationCenter,
     center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
     footprint: occupied.length * stride * stride };
 }
 
 export function sampleObjectField(field, x, y) {
+  if (x < 0 || y < 0 || x > field.sheet || y > field.sheet) {
+    return { distance: Infinity, height: field.zMin };
+  }
   const u = clamp(x / field.stride, 0, field.resolution - 1);
   const v = clamp(y / field.stride, 0, field.resolution - 1);
   const i = Math.floor(u), j = Math.floor(v);
@@ -99,14 +138,28 @@ export function sampleObjectField(field, x, y) {
     const b = array[j2 * field.resolution + i] * (1 - tx) + array[j2 * field.resolution + i2] * tx;
     return a * (1 - ty) + b * ty;
   };
-  return { distance: blend(field.distance), height: blend(field.nearest) };
+  const corners = [
+    [j * field.resolution + i, (1 - tx) * (1 - ty)],
+    [j * field.resolution + i2, tx * (1 - ty)],
+    [j2 * field.resolution + i, (1 - tx) * ty],
+    [j2 * field.resolution + i2, tx * ty]
+  ];
+  let total = 0, surface = 0;
+  for (const [index, weight] of corners) {
+    if (field.top[index] === -Infinity) continue;
+    surface += field.top[index] * weight;
+    total += weight;
+  }
+  return { distance: blend(field.distance), height: total > 0 ? surface / total : blend(field.nearest) };
 }
 
 export function chooseIndentTargets(field, count, center, width, length, clampInset) {
+  if (count <= 0) return [];
   const candidates = field.projectedVertices.filter(p =>
     p.x > clampInset + 12 && p.x < field.sheet - clampInset - 12 &&
     p.y > clampInset + 12 && p.y < field.sheet - clampInset - 12 &&
-    Math.abs(p.x - center.x) < width * .48 && Math.abs(p.y - center.y) < length * .48);
+    Math.abs(p.x - center.x) < width * .48 && Math.abs(p.y - center.y) < length * .48 &&
+    p.z >= sampleObjectField(field, p.x, p.y).height - 0.15);
   if (!candidates.length) return [];
   const targets = [candidates.reduce((best, p) =>
     Math.hypot(p.x - center.x, p.y - center.y) <
