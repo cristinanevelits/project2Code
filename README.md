@@ -13,3 +13,4 @@ The current study uses a hand scan to investigate a wrist-and-palm impression, b
 - Displays live geometry statistics, a section graph, contour previews, and a maximum-face-slope warning.
 - Exports an open-surface OBJ and a preview CSV of ordered contour points.
 
+https://cristinanevelits.github.io/project2Code/apps/sheetformer/
