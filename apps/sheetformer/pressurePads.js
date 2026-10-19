@@ -47,24 +47,17 @@ export function linearPressurePads({ sheet, clampInset, diameter, centerX, cente
   return pads;
 }
 
-// Circular recess profile on the virtual forming object: a flat-bottomed
-// centre and a smooth annular shoulder. Overlaps use the deepest recess.
-export function pressurePadLift(x, y, targets, radius, height) {
-  if (height <= 0 || radius <= 0) return 0;
-  let lift = 0;
+// Circular depressions deepen the existing imprint. A flat-depth centre and
+// smooth shoulder blend into the OBJ surface; overlaps take the deeper cut.
+export function pressurePadDepression(x, y, targets, radius, depth) {
+  if (depth <= 0 || radius <= 0) return 0;
+  let depression = 0;
   const coreRadius = radius * 0.55;
   for (const target of targets) {
     const distance = Math.hypot(x - target.x, y - target.y);
     if (distance >= radius) continue;
     const t = clamp((radius - distance) / (radius - coreRadius), 0, 1);
-    lift = Math.max(lift, height * t * t * (3 - 2 * t));
+    depression = Math.max(depression, depth * t * t * (3 - 2 * t));
   }
-  return lift;
-}
-
-// A recess removes relief from the forming object before the sheet is imprinted.
-// The resulting sheet may be locally higher than its surrounding depression,
-// but can never rise above the original, unformed sheet plane (Z = 0).
-export function recessedImprintDepth(objectDepth, recessDepth) {
-  return Math.max(0, objectDepth - Math.max(0, recessDepth));
+  return depression ? -depression : 0;
 }

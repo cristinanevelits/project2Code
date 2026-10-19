@@ -93,8 +93,8 @@
           <p class="hint">OFF uses the selected OBJ points (set their count to 0 for no pads). ON replaces them with evenly spaced rows of pads wherever a full circle fits inside the imprint.</p>
           <label class="row"><span>Contact circle diameter</span><output id="pad-diameter-value">11 mm</output></label>
           <input id="pad-diameter" type="range" min="8" max="30" step="1" value="11" aria-label="Contact circle diameter">
-          <label class="row"><span>Recess into forming OBJ</span><output id="pad-height-value">2 mm</output></label>
-          <input id="pad-height" type="range" min="0" max="15" step="0.5" value="2" aria-label="Forming object recess depth">
+          <label class="row"><span>Depress into imprint</span><output id="pad-height-value">2 mm</output></label>
+          <input id="pad-height" type="range" min="0" max="15" step="0.5" value="2" aria-label="Contact pad depression depth">
           <label class="row"><span>Manual zone width</span><output id="width-value">188 mm</output></label>
           <input id="width" type="range" min="35" max="190" step="1" value="188">
           <label class="row"><span>Manual zone length</span><output id="length-value">188 mm</output></label>
@@ -103,7 +103,7 @@
           <input id="angle" type="range" min="15" max="60" step="1" value="50">
           <p class="hint">Faces steeper than this angle are eased locally; the deeper areas are preserved where possible. Actual formed depth is shown in the preview.</p>
           <div class="coordinate"><label>Object X <input id="target-x" type="number" min="0" max="304.8" step="0.1" value="160.7"></label><label>Object Y <input id="target-y" type="number" min="0" max="304.8" step="0.1" value="217.2"></label></div>
-          <p class="hint">Recesses are applied to a virtual copy of the OBJ forming surface before imprinting. The exported sheet stays at or below Z0; the uploaded OBJ is unchanged. This is a geometry preview, not a verified pressure-point or robot path. Manual fold and zone controls affect only Manual shape.</p>
+          <p class="hint">Pads stay inside the clamp border. These are geometry previews, not verified pressure-point locations or safe contact forces. Manual fold and zone controls affect only Manual shape.</p>
         </fieldset>
         <fieldset>
           <legend>04 / TOOLPATH PREVIEW</legend>
@@ -115,7 +115,6 @@
         </fieldset>
         <div class="actions">
           <button id="export-obj">EXPORT FORM OBJ</button>
-          <button id="export-modified-reference">EXPORT RECESSED OBJECT OBJ</button>
           <button id="export-csv">EXPORT PREVIEW CSV</button>
         </div>
         <p class="warning">Preview only. The CSV follows the class column order but has not been checked for the classroom robot, tooling, fixtures, or safe clearance.</p>
@@ -140,8 +139,8 @@
         </div>
         <div class="metric-group"><h2>02 / OBJ INFLUENCE</h2>
           <div class="metric"><span>Reference markers</span><strong id="stat-targets">—</strong></div>
-          <div class="metric"><span>Object recess sites</span><strong id="stat-pads">—</strong></div>
-          <div class="metric"><span>Diameter × recess</span><strong id="stat-pad-size">—</strong></div>
+          <div class="metric"><span>Contact pad sites</span><strong id="stat-pads">—</strong></div>
+          <div class="metric"><span>Pad diameter × depth</span><strong id="stat-pad-size">—</strong></div>
           <div class="metric"><span>Imprint area on plate</span><strong id="stat-area">—</strong></div>
           <div class="metric"><span>Clamp inset</span><strong id="stat-clamp">57.4 mm</strong></div>
         </div>
@@ -159,6 +158,6 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="./app.js?v=obj-recess-export-20261018"></script>
+  <script type="module" src="./app.js?v=screenshot-preset-20261017"></script>
 </body>
 </html>
