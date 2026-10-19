@@ -47,8 +47,8 @@ export function linearPressurePads({ sheet, clampInset, diameter, centerX, cente
   return pads;
 }
 
-// Raised circular contact lands: a flat-height centre and a smooth annular
-// shoulder blend back into the underlying sheet. Overlaps take the taller land.
+// Circular recess profile on the virtual forming object: a flat-bottomed
+// centre and a smooth annular shoulder. Overlaps use the deepest recess.
 export function pressurePadLift(x, y, targets, radius, height) {
   if (height <= 0 || radius <= 0) return 0;
   let lift = 0;
@@ -60,4 +60,11 @@ export function pressurePadLift(x, y, targets, radius, height) {
     lift = Math.max(lift, height * t * t * (3 - 2 * t));
   }
   return lift;
+}
+
+// A recess removes relief from the forming object before the sheet is imprinted.
+// The resulting sheet may be locally higher than its surrounding depression,
+// but can never rise above the original, unformed sheet plane (Z = 0).
+export function recessedImprintDepth(objectDepth, recessDepth) {
+  return Math.max(0, objectDepth - Math.max(0, recessDepth));
 }

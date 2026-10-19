@@ -1,7 +1,7 @@
 import { parseBasePlate } from './basePlate.js?v=obj-loaders-20261014';
 import { parseReferenceObj } from './referenceObj.js?v=obj-loaders-20261014';
 import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets, objectRegionBounds, rotateReferenceVertex } from './objectForm.js';
-import { activePressurePads, linearPressurePads, pressurePadLift } from './pressurePads.js';
+import { activePressurePads, linearPressurePads, pressurePadLift, recessedImprintDepth } from './pressurePads.js';
 import { maxFaceSlope, relaxSteepFaces } from './slopeRelax.js';
 
 let SHEET = 304.8;
@@ -138,7 +138,7 @@ function refreshObjectField() {
     state.fieldError = error.message;
   }
 }
-function objectZAt(x, y) {
+function objectZAt(x, y, withRecesses = true) {
   const field = state.objectField;
   if (!field) return 0;
   const offsetX = state.targetX - field.center.x;
@@ -150,12 +150,16 @@ function objectZAt(x, y) {
   const surface = clamp((sample.height - field.zMin) / Math.max(.001, field.zMax - field.zMin), 0, 1);
   const silhouette = smoothstep((5 - sample.distance) / 5);
   const clampFade = smoothstep(Math.min(x - CLAMP, y - CLAMP, SHEET - CLAMP - x, SHEET - CLAMP - y) / 6);
-  return -state.depth * surface * silhouette * clampFade;
+  const objectDepth = state.depth * surface;
+  const recess = withRecesses
+    ? pressurePadLift(x, y, state.padTargets, state.padDiameter / 2, state.padHeight)
+    : 0;
+  return -recessedImprintDepth(objectDepth, recess) * silhouette * clampFade;
 }
 function rawZAt(x, y) {
   if (!state.faceSelected || x <= CLAMP || y <= CLAMP || x >= SHEET - CLAMP || y >= SHEET - CLAMP) return 0;
   if (state.formDriver === 'object') {
-    return objectZAt(x, y) + pressurePadLift(x, y, state.padTargets, state.padDiameter / 2, state.padHeight);
+    return objectZAt(x, y);
   }
   return state.foldStyle === 'faceted' ? facetedZAt(x, y) : smoothZAt(x, y);
 }
@@ -203,9 +207,11 @@ function mesh() {
   state.padTargets = state.formDriver === 'object' && state.faceSelected && state.objectField
     ? state.linearPads
       ? linearPressurePads({ sheet: SHEET, clampInset: CLAMP, diameter: state.padDiameter,
-        centerX: state.targetX, centerY: state.targetY, seed: state.patternSeed, baseAt: objectZAt })
+        centerX: state.targetX, centerY: state.targetY, seed: state.patternSeed,
+        baseAt: (x, y) => objectZAt(x, y, false) })
       : activePressurePads(state.indentTargets, {
-        sheet: SHEET, clampInset: CLAMP, radius: state.padDiameter / 2, baseAt: objectZAt
+        sheet: SHEET, clampInset: CLAMP, radius: state.padDiameter / 2,
+        baseAt: (x, y) => objectZAt(x, y, false)
       }) : [];
   const ax = axis(state.edge);
   state.axes = ax;
@@ -234,7 +240,7 @@ function mesh() {
   for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
     const midX = (ax[i] + ax[i + 1]) / 2;
     const midY = (ax[j] + ax[j + 1]) / 2;
-    if ((state.formDriver === 'object' ? objectZAt(midX, midY) : zAt(midX, midY)) < -0.5) {
+    if ((state.formDriver === 'object' ? objectZAt(midX, midY, false) : zAt(midX, midY)) < -0.5) {
       state.imprintArea += (ax[i + 1] - ax[i]) * (ax[j + 1] - ax[j]);
     }
   }
@@ -399,7 +405,7 @@ function updateReadouts() {
     status.textContent = `Local smoothing could not bring every face below ${state.angle}°; the steepest is ${state.maxSlope.toFixed(1)}°. Reduce depth or review the shape with the instructor.`;
     status.classList.add('warn');
   } else if (state.slopeRelaxed) {
-    status.textContent = `Faces steeper than ${state.angle}° were eased locally. The formed depth is ${maxDepth.toFixed(1)} mm; check the pad shapes and forming feasibility with the instructor.`;
+    status.textContent = `Faces steeper than ${state.angle}° were eased locally. The formed depth is ${maxDepth.toFixed(1)} mm; check the recess shapes and forming feasibility with the instructor.`;
     status.classList.add('warn');
   } else {
     status.textContent = state.formDriver === 'object'
@@ -422,7 +428,9 @@ function updateProfileGraph() {
     if (sample.distance > 12) { startedReference = false; continue; }
     const relief = clamp((sample.height - state.objectField.zMin) /
       Math.max(.001, state.objectField.zMax - state.objectField.zMin), 0, 1);
-    const reliefY = 56 - relief * 34;
+    const recess = pressurePadLift(x, state.targetY, state.padTargets,
+      state.padDiameter / 2, state.padHeight) / Math.max(1, state.depth);
+    const reliefY = 56 - Math.max(0, relief - recess) * 34;
     reference.push(`${startedReference ? 'L' : 'M'}${graphX.toFixed(1)} ${reliefY.toFixed(1)}`);
     startedReference = true;
   }
@@ -488,17 +496,35 @@ function drawCreases(ctx, mapPoint, opacity) {
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
   }
 }
-function handPoint(v) {
+function formingReferencePoint(v) {
   const field = state.objectField;
   const [x, y, z] = rotateReferenceVertex(v, state.objectRotation, field.rotationCenter);
   const midX = (state.handBounds.minX + state.handBounds.maxX) / 2;
   const midY = (state.handBounds.minY + state.handBounds.maxY) / 2;
+  const sheetX = state.targetX + SHEET / 2 + (x - midX) * state.handScale - field.center.x;
+  const sheetY = state.targetY + SHEET / 2 + (y - midY) * state.handScale - field.center.y;
+  let recess = 0;
+  if (state.formDriver === 'object') {
+    const candidate = pressurePadLift(sheetX, sheetY, state.padTargets,
+      state.padDiameter / 2, state.padHeight);
+    if (candidate > 0) {
+      const sampled = sampleObjectField(field,
+        sheetX - state.targetX + field.center.x, sheetY - state.targetY + field.center.y);
+      if (z >= sampled.height - 0.15) recess = candidate;
+    }
+  }
   return {
-    x: state.targetX + SHEET / 2 + (x - midX) * state.handScale - field.center.x,
-    y: state.targetY + SHEET / 2 + (y - midY) * state.handScale - field.center.y,
-    // Keep the rotated side nearest the sheet just above its unformed plane.
-    z: 6 + (field.zMax - z) * state.handScale
+    x: sheetX,
+    y: sheetY,
+    // The high-Z scan side is the forming face; a recess moves it away from
+    // the sheet. Coordinates are in the same millimetre frame as the plate.
+    z: (field.zMax - z) * state.handScale + recess
   };
+}
+function handPoint(v) {
+  const point = formingReferencePoint(v);
+  // Lift the object only for the floating visual reference.
+  return { ...point, z: point.z + 6 };
 }
 function drawPadRings(ctx, mapPoint) {
   if (state.formDriver !== 'object' || !state.padTargets.length) return;
@@ -707,6 +733,18 @@ function exportObj() {
   const faces = state.faces.map(f => 'f ' + f.map(i => i + 1).join(' '));
   download('sheetformer_wrist_preview.obj', '# Design preview; units: mm; open sheet surface\n' + vertices.concat(faces).join('\n') + '\n', 'text/plain');
 }
+function exportModifiedReferenceObj() {
+  if (!state.objectMesh || !state.objectField) return;
+  const vertices = state.objectMesh.vertices.map(vertex => {
+    const point = formingReferencePoint(vertex);
+    return `v ${point.x.toFixed(4)} ${point.y.toFixed(4)} ${point.z.toFixed(4)}`;
+  });
+  const faces = state.objectMesh.faces.map(face =>
+    'f ' + face.map(index => index + 1).join(' '));
+  download('sheetformer_recessed_forming_object_preview.obj',
+    '# Derived reference preview in mm; source OBJ unchanged; not robot-ready\n' +
+    vertices.concat(faces).join('\n') + '\n', 'text/plain');
+}
 function exportCsv() {
   const rows = ['index,x,y,z,move'];
   state.csvPoints.forEach((p,i) => rows.push([i,p.x.toFixed(4),p.y.toFixed(4),p.z.toFixed(4),p.move].join(',')));
@@ -828,6 +866,7 @@ for (const kind of ['base', 'object']) {
   });
 }
 $('export-obj').addEventListener('click', exportObj);
+$('export-modified-reference').addEventListener('click', exportModifiedReferenceObj);
 $('export-csv').addEventListener('click', exportCsv);
 topCanvas.addEventListener('pointerdown', (event) => {
   if (!topMap) return;

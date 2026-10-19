@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activePressurePads, linearPressurePads, pressurePadLift } from './pressurePads.js';
+import { activePressurePads, linearPressurePads, pressurePadLift, recessedImprintDepth } from './pressurePads.js';
 
 test('each pad has a circular plateau and blends to the unchanged surface', () => {
   const targets = [{ x: 50, y: 50 }];
@@ -10,6 +10,13 @@ test('each pad has a circular plateau and blends to the unchanged surface', () =
   assert.equal(pressurePadLift(60, 50, targets, 10, 6), 0);
   assert.equal(pressurePadLift(50, 60, targets, 10, 6), 0);
   assert.equal(pressurePadLift(50, 50, targets, 10, 0), 0);
+});
+
+test('a recessed forming object cannot push the sheet above its original plane', () => {
+  assert.equal(recessedImprintDepth(12, 2), 10);
+  assert.equal(recessedImprintDepth(1, 2), 0);
+  assert.equal(recessedImprintDepth(0, 2), 0);
+  assert.equal(recessedImprintDepth(12, 0), 12);
 });
 
 test('moving an OBJ point outside the formable face removes its pad', () => {
