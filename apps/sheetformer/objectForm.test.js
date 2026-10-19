@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { objectRegionBounds, buildObjectField, sampleObjectField, rotateReferenceVertex, reprojectIndentTargets, chooseIndentTargets } from './objectForm.js';
+import { objectRegionBounds, buildObjectField, sampleObjectField, rotateReferenceVertex, reprojectIndentTargets, chooseIndentTargets, buildWidthProfile, narrowWristSlice, widthSliceAt } from './objectForm.js';
 
 const mesh = {
   vertices: [
@@ -51,4 +51,22 @@ test('half-turn exposes the opposite OBJ surface and a full turn restores the or
   assert.notEqual(original.x, flipped.x);
   assert.deepEqual(flipped.raw, slab.vertices[4]);
   assert.deepEqual(rotateReferenceVertex([2, 0, 1], 180, { x: 1, z: 1 }).map(Math.round), [0, 0, 1]);
+});
+
+test('wrist width starts at the narrow lower-Y transition and follows a moved slice', () => {
+  const vertices = [];
+  for (let y = 0; y <= 128; y++) {
+    const width = 1 + Math.abs(y / 128 - 0.4) * 5;
+    vertices.push([-width / 2, y, 0], [width / 2, y, 0]);
+  }
+  const scan = { vertices, bounds: { minX: -2, maxX: 2, minY: 0, maxY: 128, minZ: 0, maxZ: 0 } };
+  const field = { scale: 20, rotationDegrees: 0, rotationCenter: { x: 0, z: 0 } };
+  const profile = buildWidthProfile(scan, field);
+  const wrist = narrowWristSlice(profile);
+  assert.ok(Math.abs(wrist.fraction - 0.4) < 0.02);
+  assert.ok(wrist.width > 20 && wrist.width < 22);
+  const moved = widthSliceAt(profile, 0.6);
+  assert.ok(Math.abs(moved.fraction - 0.6) < 0.01);
+  assert.ok(moved.width > wrist.width);
+  assert.equal(buildWidthProfile(scan, { ...field, scale: 40 })[profile.indexOf(wrist)].width, wrist.width * 2);
 });

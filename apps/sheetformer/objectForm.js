@@ -30,6 +30,43 @@ export function rotateReferenceVertex([x, y, z], degrees, center) {
     center.z - dx * sine + dz * cosine];
 }
 
+// Top-view caliper widths along the OBJ's long Y axis. The 128 narrow bands
+// make the line draggable without rebuilding the expensive forming field.
+// These are projected outline widths, not anatomical circumferences.
+export function buildWidthProfile(mesh, field, binCount = 128) {
+  const { minY, maxY } = mesh.bounds;
+  const span = maxY - minY;
+  if (!(span > 0)) return [];
+  const bins = Array.from({ length: binCount }, () => ({ left: Infinity, right: -Infinity, count: 0 }));
+  for (const vertex of mesh.vertices) {
+    const index = clamp(Math.floor((vertex[1] - minY) / span * binCount), 0, binCount - 1);
+    const x = rotateReferenceVertex(vertex, field.rotationDegrees, field.rotationCenter)[0];
+    const bin = bins[index];
+    bin.left = Math.min(bin.left, x);
+    bin.right = Math.max(bin.right, x);
+    bin.count++;
+  }
+  const minPoints = Math.max(2, Math.floor(mesh.vertices.length / 5000));
+  return bins.map((bin, index) => bin.count < minPoints ? null : {
+    fraction: (index + 0.5) / binCount,
+    y: minY + (index + 0.5) / binCount * span,
+    left: bin.left, right: bin.right,
+    width: (bin.right - bin.left) * field.scale
+  });
+}
+
+export function narrowWristSlice(profile) {
+  // On the default scan, forearm is low Y and palm begins around 45% of its
+  // length. Exclude the cropped forearm end and finger gaps from auto-pick.
+  return profile.filter(slice => slice && slice.fraction >= 0.29 && slice.fraction <= 0.46)
+    .reduce((best, slice) => !best || slice.width < best.width ? slice : best, null);
+}
+
+export function widthSliceAt(profile, fraction) {
+  return profile.filter(Boolean).reduce((best, slice) =>
+    !best || Math.abs(slice.fraction - fraction) < Math.abs(best.fraction - fraction) ? slice : best, null);
+}
+
 // A downward, single-valued forming preview: ray-project the OBJ triangles onto
 // the sheet. This cannot model undercuts, plastic strain, or tool collisions.
 export function buildObjectField(mesh, { sheet, scale, region, rotationDegrees = 0, resolution = 385 }) {

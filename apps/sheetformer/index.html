@@ -33,20 +33,20 @@
           </div>
         </div>
         <div class="view-footer"><span>● formed sheet</span><span id="reference-legend">○ hand scan reference</span><span>— selected toolpath</span></div>
-        <div class="view-head secondary"><span>TOP / OBJECT PLACEMENT <small>drag the hand or blue center point</small></span><span id="sheet-size">304.8 × 304.8 MM</span></div>
-        <canvas id="top-view" aria-label="Top view showing clamp zone and draggable hand reference"></canvas>
-        <p class="canvas-note" id="reference-note">At 0°, the scan's high-Z side faces the sheet. Rotate 180° to preview the opposite side. Only the portion over the formable plate imprints it.</p>
+        <div class="view-head secondary"><span>TOP / OBJECT PLACEMENT <small>drag hand to place · drag blue width line to measure</small></span><span id="sheet-size">304.8 × 304.8 MM</span></div>
+        <canvas id="top-view" aria-label="Top view showing clamp zone, draggable hand reference, and draggable wrist-width measurement line"></canvas>
+        <p class="canvas-note" id="reference-note">At 180°, the scan's opposite side faces the sheet. Only the portion over the formable plate imprints it.</p>
       </div>
       <aside class="controls">
         <div class="panel-title"><span>PARAMETERS</span><span>( EDITABLE )</span></div>
         <div class="status" id="status">Loading geometry…</div>
         <fieldset>
           <legend>01 / REFERENCE</legend>
-          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">20.1 mm/unit</output></label>
-          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="20.1">
+          <label class="row"><span id="reference-scale-label">Hand scale</span><output id="hand-scale-value">29.1 mm/unit</output></label>
+          <input id="hand-scale" type="range" min="5" max="40" step="0.1" value="29.1">
           <p class="hint">Scale affects both the reference and the fitted sheet. OBJ units are unspecified.</p>
-          <label class="row" for="object-rotation"><span>Rotate OBJ around wrist–finger axis</span><output id="object-rotation-value">0°</output></label>
-          <input id="object-rotation" type="range" min="0" max="360" step="1" value="0" aria-label="Rotate OBJ around wrist-to-finger axis">
+          <label class="row" for="object-rotation"><span>Rotate OBJ around wrist–finger axis</span><output id="object-rotation-value">180°</output></label>
+          <input id="object-rotation" type="range" min="0" max="360" step="1" value="180" aria-label="Rotate OBJ around wrist-to-finger axis">
           <p class="hint">0° shows the current side; 180° turns the opposite side toward the sheet (the palm, if this scan is oriented as expected). The preview, projected points, and imprint rotate together.</p>
           <label class="row"><span>Reference visibility</span><input id="show-hand" type="checkbox" checked></label>
           <button class="load-obj" id="load-object-button" type="button">LOAD OBJECT OBJ</button>
@@ -71,8 +71,8 @@
           <button class="load-obj" id="load-base-button" type="button">LOAD BASE PLATE OBJ</button>
           <input class="file-input" id="base-file" type="file" accept=".obj" aria-label="Choose an OBJ base plate">
           <p class="hint file-status" id="base-file-status" role="status">Default: basePlate.obj</p>
-          <label class="row"><span>Sheet mesh spacing</span><output id="edge-value">1 mm</output></label>
-          <input id="edge" type="range" min="1" max="8" step="0.5" value="1">
+          <label class="row"><span>Sheet mesh spacing</span><output id="edge-value">2 mm</output></label>
+          <input id="edge" type="range" min="1" max="8" step="0.5" value="2">
           <label class="row"><span>Active face</span><strong id="face-value">CENTRAL</strong></label>
         </fieldset>
         <fieldset>
@@ -112,6 +112,7 @@
           <label class="row"><span>Jog height</span><output>100 mm</output></label>
           <label class="row"><span>Show toolpath</span><input id="show-path" type="checkbox" checked></label>
           <p class="hint" id="path-readout">Calculating contours…</p>
+          <p class="hint">Contour links follow the mesh's triangle boundaries so straight segments do not cut through it. Links that climb a ridge retract and jog. Island transitions exclude the first approach and final retract.</p>
         </fieldset>
         <div class="actions">
           <button id="export-obj">EXPORT FORM OBJ</button>
@@ -136,6 +137,7 @@
           <div class="metric"><span>OBJ vertices</span><strong id="stat-vertices">—</strong></div>
           <div class="metric"><span>Triangles</span><strong id="stat-faces">—</strong></div>
           <div class="metric"><span>Region</span><strong id="stat-region">Whole OBJ</strong></div>
+          <div class="metric" title="Projected OBJ outline width at the draggable blue line, using the current scale. Not wrist circumference."><span>Wrist slice width</span><strong id="stat-wrist-width">—</strong></div>
         </div>
         <div class="metric-group"><h2>02 / OBJ INFLUENCE</h2>
           <div class="metric"><span>Reference markers</span><strong id="stat-targets">—</strong></div>
@@ -152,6 +154,7 @@
         </div>
         <div class="metric-group"><h2>04 / PATH</h2>
           <div class="metric"><span>Contour loops</span><strong id="stat-loops">—</strong></div>
+          <div class="metric"><span>Island transitions</span><strong id="stat-island-jogs">—</strong></div>
           <div class="metric"><span>Ordered points</span><strong id="stat-path-points">—</strong></div>
         </div>
         <p class="metric-foot">Geometry measurements only. No stiffness, forming-force, collision, or robot-safety calculation is performed.</p>

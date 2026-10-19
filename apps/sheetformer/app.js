@@ -1,12 +1,13 @@
 import { parseBasePlate } from './basePlate.js?v=obj-loaders-20261014';
 import { parseReferenceObj } from './referenceObj.js?v=obj-loaders-20261014';
-import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets, objectRegionBounds, rotateReferenceVertex } from './objectForm.js';
+import { buildObjectField, sampleObjectField, chooseIndentTargets, reprojectIndentTargets, objectRegionBounds, rotateReferenceVertex, buildWidthProfile, narrowWristSlice, widthSliceAt } from './objectForm.js';
 import { activePressurePads, linearPressurePads, pressurePadDepression } from './pressurePads.js';
 import { maxFaceSlope, relaxSteepFaces } from './slopeRelax.js';
+import { routeContours } from './toolpath.js';
 
 let SHEET = 304.8;
 let CLAMP = 57.4;
-const DEFAULT_HAND_SCALE = 20.1;
+const DEFAULT_HAND_SCALE = 29.1;
 const DEFAULT_HAND_POSITION = { x: 160.7, y: 217.2 };
 const $ = (id) => document.getElementById(id);
 const formCanvas = $('form-view');
@@ -33,19 +34,22 @@ function resetControlsToDefaults() {
   }
 }
 const state = {
-  handScale: DEFAULT_HAND_SCALE, objectRotation: 0, showHand: true, edge: 1, depth: 18.5, width: 188,
+  handScale: DEFAULT_HAND_SCALE, objectRotation: 180, showHand: true, edge: 2, depth: 18.5, width: 188,
   length: 188, angle: 50, targetX: DEFAULT_HAND_POSITION.x, targetY: DEFAULT_HAND_POSITION.y,
   formDriver: 'object', formRegion: 'whole', indentCount: 0, linearPads: true, patternSeed: 50,
   padDiameter: 11, padHeight: 2, padTargets: [],
   foldStyle: 'faceted', step: 0.5, showPath: true, faceSelected: true,
   yaw: -1.02, pitch: 0.41, hand: [], handBounds: null,
   objectMesh: null, objectField: null, fieldKey: '', fieldError: null, indentTargets: [],
+  wristProfile: [], wristFraction: null, wristMeasurement: null,
   indentSourceIndices: [], indentSelectionKey: '', objectName: 'Loading…',
   axes: [], vertices: [], faces: [], faceCells: [], tipCells: new Set(), removedCells: new Set(), tipVertexIndices: [], contours: [], csvPoints: [],
+  islandTransitions: 0,
   maxSlope: 0, slopeRelaxed: false, meshReady: false, imprintArea: 0, baseLoaded: false, baseError: null
 };
 let topMap = null;
 let topDrag = null;
+let wristMarkerPixels = null;
 let formDrag = null;
 let drawQueued = false; 
 let baseRequest = 0;
@@ -131,12 +135,26 @@ function refreshObjectField() {
     });
     state.handBounds = state.objectField.bounds;
     state.hand = state.objectMesh.points.filter(vertex => vertex[1] <= state.handBounds.cutoff);
+    refreshWristProfile();
     state.fieldKey = key;
     state.fieldError = null;
   } catch (error) {
     state.objectField = null;
+    state.wristProfile = [];
+    state.wristMeasurement = null;
     state.fieldError = error.message;
   }
+}
+function refreshWristProfile() {
+  state.wristProfile = buildWidthProfile(state.objectMesh, state.objectField);
+  state.wristMeasurement = state.wristFraction === null
+    ? narrowWristSlice(state.wristProfile)
+    : widthSliceAt(state.wristProfile, state.wristFraction);
+  if (state.wristMeasurement) state.wristFraction = state.wristMeasurement.fraction;
+}
+function updateWristReadout() {
+  $('stat-wrist-width').textContent = state.wristMeasurement
+    ? `≈${state.wristMeasurement.width.toFixed(1)} mm` : '—';
 }
 function objectZAt(x, y) {
   const field = state.objectField;
@@ -255,6 +273,7 @@ function pointKey(p) { return Math.round(p.x * 1000) + ':' + Math.round(p.y * 10
 function contours() {
   state.contours = [];
   state.csvPoints = [];
+  state.islandTransitions = 0;
   if (!state.faceSelected) return;
   const minZ = Math.min(...state.vertices.map(v => v.z));
   for (let level = -state.step; level > minZ + state.step * 0.25; level -= state.step) {
@@ -292,14 +311,11 @@ function contours() {
       if (line.length > 5) state.contours.push(line);
     }
   }
-  for (const line of state.contours) {
-    const first = line[0], last = line[line.length - 1];
-    state.csvPoints.push({ x: first.x, y: first.y, z: 100, move: 'jog' });
-    state.csvPoints.push({ x: first.x, y: first.y, z: first.z, move: 'plunge' });
-    for (const point of line) state.csvPoints.push({ ...point, move: 'feed' });
-    if (Math.hypot(first.x - last.x, first.y - last.y) < state.edge * 1.5) state.csvPoints.push({ ...first, move: 'feed' });
-    state.csvPoints.push({ x: first.x, y: first.y, z: 100, move: 'jog' });
-  }
+  const routed = routeContours(state.contours, {
+    sampleSurface: zAt, axes: state.axes, closeTolerance: state.edge * 0.2
+  });
+  state.csvPoints = routed.points;
+  state.islandTransitions = routed.islandTransitions;
 }
 function readControls() {
   const previousRegion = state.formRegion;
@@ -353,7 +369,8 @@ function readControls() {
 function updateReadouts() {
   $('mesh-readout').textContent = state.vertices.length.toLocaleString() + ' VERTICES · ' + state.maxSlope.toFixed(1) + '° MAX SLOPE';
   $('face-value').textContent = state.faceSelected ? 'CENTRAL' : 'NONE';
-  $('path-readout').textContent = state.contours.length + ' contour loops · ' + state.csvPoints.length.toLocaleString() + ' ordered path points';
+  $('path-readout').textContent = state.contours.length + ' contour loops · ' +
+    state.islandTransitions + ' island transitions · ' + state.csvPoints.length.toLocaleString() + ' ordered path points';
   const maxDepth = Math.max(0, -Math.min(...state.vertices.map(v => v.z)));
   $('hero-depth').textContent = maxDepth.toFixed(1);
   $('stat-source').textContent = state.objectName;
@@ -361,6 +378,7 @@ function updateReadouts() {
   $('stat-faces').textContent = state.objectMesh ? state.objectMesh.faces.length.toLocaleString() : '—';
   $('stat-region').textContent = state.formRegion === 'wrist-palm' ? 'Wrist + palm'
     : state.formRegion === 'lower' ? 'Lower-Y end' : 'Whole OBJ';
+  updateWristReadout();
   $('stat-targets').textContent = state.formDriver === 'manual' ? '—'
     : state.linearPads ? 'Linear layout' : `${state.indentTargets.length} / ${state.indentCount}`;
   $('stat-pads').textContent = state.formDriver === 'manual' ? '—'
@@ -375,6 +393,7 @@ function updateReadouts() {
   $('stat-limit').textContent = `${state.angle}°`;
   $('stat-loops').textContent = state.contours.length.toLocaleString();
   $('stat-path-points').textContent = state.csvPoints.length.toLocaleString();
+  $('stat-island-jogs').textContent = String(state.islandTransitions);
   updateProfileGraph();
   const status = $('status');
   if (state.baseError) {
@@ -488,6 +507,22 @@ function drawCreases(ctx, mapPoint, opacity) {
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
   }
 }
+function drawFeedPath(ctx, mapPoint, alpha, lineWidth) {
+  if (!state.showPath) return;
+  ctx.save();
+  ctx.strokeStyle = withAlpha(MAUVE, alpha);
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  let active = false;
+  for (const point of state.csvPoints) {
+    if (point.move !== 'feed') { active = false; continue; }
+    const p = mapPoint(point);
+    if (active) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+    active = true;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
 function handPoint(v) {
   const field = state.objectField;
   const [x, y, z] = rotateReferenceVertex(v, state.objectRotation, field.rotationCenter);
@@ -498,6 +533,17 @@ function handPoint(v) {
     y: state.targetY + SHEET / 2 + (y - midY) * state.handScale - field.center.y,
     // Keep the rotated side nearest the sheet just above its unformed plane.
     z: 6 + (field.zMax - z) * state.handScale
+  };
+}
+function wristLineOnSheet() {
+  const measurement = state.wristMeasurement;
+  const field = state.objectField;
+  if (!measurement || !field) return null;
+  const midY = (field.bounds.minY + field.bounds.maxY) / 2;
+  const placeX = x => state.targetX + SHEET / 2 + (x - field.rotationCenter.x) * state.handScale - field.center.x;
+  return {
+    left: placeX(measurement.left), right: placeX(measurement.right),
+    y: state.targetY + SHEET / 2 + (measurement.y - midY) * state.handScale - field.center.y
   };
 }
 function drawPadRings(ctx, mapPoint) {
@@ -590,19 +636,8 @@ function drawForm() {
       ctx.fillRect(q.x, q.y, 1.7, 1.7);
     }
   }
-  if (state.showPath) {
-    const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
-    ctx.lineWidth = faintManual ? .85 : 1.15;
-    ctx.strokeStyle = withAlpha(MAUVE, faintManual ? .33 : .83);
-    for (const line of state.contours) {
-      ctx.beginPath();
-      for (let i = 0; i < line.length; i++) {
-        const p = project(line[i].x, line[i].y, line[i].z + 1, w, h);
-        if (!i) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
-      }
-      ctx.stroke();
-    }
-  }
+  const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
+  drawFeedPath(ctx, p => project(p.x, p.y, p.z + 1, w, h), faintManual ? .33 : .83, faintManual ? .85 : 1.15);
   drawPadRings(ctx, (x, y, z) => project(x, y, z, w, h));
   if (state.formDriver === 'object' && state.showHand) {
     ctx.lineWidth = 1;
@@ -638,6 +673,7 @@ function drawTop() {
   const size = Math.min(h - 28, w - 36) * 0.74;
   const ox = (w - size) / 2, oy = (h - size) / 2;
   topMap = { ox, oy, size };
+  wristMarkerPixels = null;
   const map = (x,y) => ({ x: ox + x / SHEET * size, y: oy + (SHEET-y) / SHEET * size });
   ctx.fillStyle = '#2a2b2d'; ctx.fillRect(ox,oy,size,size);
   const inner = map(CLAMP,SHEET-CLAMP), innerEnd = map(SHEET-CLAMP,CLAMP);
@@ -668,16 +704,8 @@ function drawTop() {
       return map(point.x, point.y);
     }), null, ctx.strokeStyle);
   }
-  if (state.showPath) {
-    const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
-    ctx.strokeStyle = withAlpha(MAUVE, faintManual ? .18 : .55);
-    ctx.lineWidth = 1;
-    for (const line of state.contours) {
-      ctx.beginPath();
-      line.forEach((point,i) => { const p = map(point.x,point.y); if (!i) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y); });
-      ctx.stroke();
-    }
-  }
+  const faintManual = state.formDriver === 'manual' && state.foldStyle === 'faceted';
+  drawFeedPath(ctx, p => map(p.x, p.y), faintManual ? .18 : .55, 1);
   drawPadRings(ctx, (x, y) => map(x, y));
   const target = map(state.targetX,state.targetY);
   ctx.fillStyle = BLUE; ctx.beginPath(); ctx.arc(target.x,target.y,7,0,Math.PI*2); ctx.fill();
@@ -691,6 +719,28 @@ function drawTop() {
     }
     ctx.fillStyle = '#eeebe5'; ctx.font = '10px ui-monospace, monospace';
     ctx.fillText(`T${String(i + 1).padStart(2, '0')}`, p.x + 10, p.y - 10);
+  }
+  if (state.showHand) {
+    const line = wristLineOnSheet();
+    if (line) {
+      const left = map(line.left, line.y), right = map(line.right, line.y);
+      wristMarkerPixels = { x1: left.x, x2: right.x, y: left.y };
+      ctx.save();
+      ctx.strokeStyle = '#121314'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(left.x, left.y); ctx.lineTo(right.x, right.y); ctx.stroke();
+      ctx.strokeStyle = BLUE; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(left.x, left.y); ctx.lineTo(right.x, right.y); ctx.stroke();
+      for (const x of [left.x, right.x]) {
+        ctx.beginPath(); ctx.moveTo(x, left.y - 6); ctx.lineTo(x, left.y + 6); ctx.stroke();
+      }
+      ctx.fillStyle = BLUE; ctx.beginPath(); ctx.arc(right.x, right.y, 5, 0, Math.PI * 2); ctx.fill();
+      const label = `≈${state.wristMeasurement.width.toFixed(1)} MM`;
+      ctx.font = '10px ui-monospace, monospace';
+      const labelX = Math.max(4, Math.min(w - ctx.measureText(label).width - 8, left.x));
+      ctx.fillStyle = '#121314'; ctx.fillRect(labelX - 3, left.y - 21, ctx.measureText(label).width + 6, 15);
+      ctx.fillStyle = BLUE; ctx.fillText(label, labelX, left.y - 10);
+      ctx.restore();
+    }
   }
   ctx.fillStyle = '#eeebe5'; ctx.font = '10px ui-monospace, monospace';
   ctx.fillText(`FIXED ${CLAMP.toFixed(1)} MM CLAMP`, ox + 5, oy + 13);
@@ -724,6 +774,8 @@ function applyReference(text, name) {
   state.handBounds = field.bounds;
   state.objectMesh = reference;
   state.objectField = field;
+  state.wristFraction = null;
+  refreshWristProfile();
   state.indentSourceIndices = [];
   state.indentSelectionKey = '';
   state.formRegion = region;
@@ -739,7 +791,7 @@ function applyReference(text, name) {
   $('reference-scale-label').textContent = custom ? 'Object scale' : 'Hand scale';
   $('reference-note').textContent = custom
     ? 'Rotate the loaded OBJ to choose which side faces the sheet. Check units, orientation, and undercuts before fabrication.'
-    : 'At 0°, the scan\'s high-Z side faces the sheet. Rotate 180° to preview the opposite side. Only the portion over the formable plate imprints it.';
+    : 'At 180°, the scan\'s opposite side faces the sheet. Rotate to 0° for the high-Z side. Only the portion over the formable plate imprints it.';
   $('form-view').setAttribute('aria-label', 'Perspective preview of OBJ-driven sheet forming');
   const label = $('object-file-status');
   label.textContent = `${name} · ${reference.vertices.length.toLocaleString()} vertices`;
@@ -833,6 +885,12 @@ topCanvas.addEventListener('pointerdown', (event) => {
   if (!topMap) return;
   const rect = topCanvas.getBoundingClientRect();
   const px = event.clientX - rect.left, py = event.clientY - rect.top;
+  if (wristMarkerPixels && Math.abs(py - wristMarkerPixels.y) < 11 &&
+      px >= wristMarkerPixels.x1 - 9 && px <= wristMarkerPixels.x2 + 12) {
+    topDrag = { kind: 'wrist' };
+    topCanvas.setPointerCapture(event.pointerId);
+    return;
+  }
   const tx = topMap.ox + state.targetX / SHEET * topMap.size;
   const ty = topMap.oy + (SHEET - state.targetY) / SHEET * topMap.size;
   let onReference = false;
@@ -845,7 +903,7 @@ topCanvas.addEventListener('pointerdown', (event) => {
     }
   }
   if (Math.hypot(px-tx,py-ty) < 18 || onReference) {
-    topDrag = { x: px, y: py, targetX: state.targetX, targetY: state.targetY };
+    topDrag = { kind: 'object', x: px, y: py, targetX: state.targetX, targetY: state.targetY };
     topCanvas.setPointerCapture(event.pointerId);
     return;
   }
@@ -855,8 +913,28 @@ topCanvas.addEventListener('pointerdown', (event) => {
   mesh(); scheduleDraw();
 });
 topCanvas.addEventListener('pointermove', (event) => {
-  if (!topDrag || !topMap) return;
+  if (!topMap) return;
   const rect = topCanvas.getBoundingClientRect();
+  if (!topDrag) {
+    const px = event.clientX - rect.left, py = event.clientY - rect.top;
+    topCanvas.style.cursor = wristMarkerPixels && Math.abs(py - wristMarkerPixels.y) < 11 &&
+      px >= wristMarkerPixels.x1 - 9 && px <= wristMarkerPixels.x2 + 12 ? 'ns-resize' : '';
+    return;
+  }
+  if (topDrag.kind === 'wrist') {
+    const field = state.objectField;
+    const bounds = state.objectMesh?.bounds;
+    if (!field || !bounds) return;
+    const sheetY = SHEET - (event.clientY - rect.top - topMap.oy) / topMap.size * SHEET;
+    const midY = (field.bounds.minY + field.bounds.maxY) / 2;
+    const rawY = (sheetY - state.targetY + field.center.y - SHEET / 2) / state.handScale + midY;
+    const fraction = clamp((rawY - bounds.minY) / (bounds.maxY - bounds.minY), 0, 1);
+    state.wristMeasurement = widthSliceAt(state.wristProfile, fraction);
+    if (state.wristMeasurement) state.wristFraction = state.wristMeasurement.fraction;
+    updateWristReadout();
+    scheduleDraw();
+    return;
+  }
   const min = state.formDriver === 'object' ? 0 : CLAMP + 1;
   const max = state.formDriver === 'object' ? SHEET : SHEET - CLAMP - 1;
   const x = clamp(topDrag.targetX + (event.clientX - rect.left - topDrag.x) / topMap.size * SHEET, min, max);
@@ -866,6 +944,7 @@ topCanvas.addEventListener('pointermove', (event) => {
 });
 topCanvas.addEventListener('pointerup', () => { topDrag = null; });
 topCanvas.addEventListener('pointercancel', () => { topDrag = null; });
+topCanvas.addEventListener('pointerleave', () => { if (!topDrag) topCanvas.style.cursor = ''; });
 formCanvas.addEventListener('pointerdown', (event) => {
   formDrag = { x: event.clientX, y: event.clientY, yaw: state.yaw, pitch: state.pitch };
   formCanvas.setPointerCapture(event.pointerId);
